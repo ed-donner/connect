@@ -1,11 +1,7 @@
-import gradio as gr
+from arena.c4 import make_display
 
 
-def greet(name):
-    return f"Hello, {name}!"
-
-
-app = gr.Interface(fn=greet, inputs="text", outputs="text")
+app = make_display()
 
 if __name__ == "__main__":
     app.launch()
