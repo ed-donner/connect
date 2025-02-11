@@ -9,7 +9,6 @@ sdk_version: 5.15.0
 pinned: false
 python_version: 3.12
 license: mit
-python_version: 3.12
 short_description: Arena for playing Four-in-a-row between LLMs
 ---
 
