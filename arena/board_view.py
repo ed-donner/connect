@@ -3,7 +3,11 @@ YELLOW = -1
 EMPTY = 0
 
 def to_svg(board):
-    """Convert the board state to an SVG representation"""
+    """
+    Create an SVG representation of the board, with the latest piece dropping down via SVG
+    I must confess that this function was written almost entirely by Claude; done in 15 mins,
+    when it would have taken me a couple of hours. Amazing!
+    """
     svg = '''
     <div style="display: flex; justify-content: center;">
     <svg width="450" height="420" viewBox="0 0 450 420">

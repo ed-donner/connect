@@ -5,8 +5,15 @@ import random
 
 
 class Player:
+    """
+    This class represents one AI player in the game, and is responsible for managing the prompts
+    Delegating to an LLM instance to connect to the LLM
+    """
 
-    def __init__(self, model, color):
+    def __init__(self, model: str, color: int):
+        """
+        Set up this instance for the given model and player color
+        """
         self.color = color
         self.model = model
         self.llm = LLM.create(self.model)
@@ -15,7 +22,10 @@ class Player:
         self.opportunities = ""
         self.strategy = ""
 
-    def system(self, board, legal_moves, illegal_moves):
+    def system(self, board, legal_moves: str, illegal_moves: str) -> str:
+        """
+        Return the system prompt for this move
+        """
         return f"""You are playing the board game Connect 4.
 Players take turns to drop counters into one of 7 columns A, B, C, D, E, F, G.
 The winner is the first player to get 4 counters in a row in any direction.
@@ -33,7 +43,10 @@ You should respond in JSON according to this spec:
 
 You must pick one of these letters for your move_column: {legal_moves}{illegal_moves}"""
 
-    def user(self, board, legal_moves, illegal_moves):
+    def user(self, board, legal_moves: str, illegal_moves: str) -> str:
+        """
+        Return the user prompt for this move
+        """
         return f"""It is your turn to make a move as {pieces[self.color]}.
 Here is the current board, with row 1 at the bottom of the board:
 
@@ -78,8 +91,10 @@ Now make your decision.
 You must pick one of these letters for your move_column: {legal_moves}{illegal_moves}
 """
 
-    def process_move(self, reply, board):
-        print(reply)
+    def process_move(self, reply: str, board):
+        """
+        Interpret the reply and make the move; if the move is illegal, then the current player loses
+        """
         try:
             if len(reply) == 3 and reply[0] == "{" and reply[2] == "}":
                 reply = f'{{"move_column": "{reply[1]}"}}'
@@ -100,6 +115,9 @@ You must pick one of these letters for your move_column: {legal_moves}{illegal_m
             board.winner = -1 * board.player
 
     def move(self, board):
+        """
+        Have the underlying LLM make a move, and process the result
+        """
         legal_moves = ", ".join(board.legal_moves())
         if illegal := board.illegal_moves():
             illegal_moves = (
@@ -114,6 +132,9 @@ You must pick one of these letters for your move_column: {legal_moves}{illegal_m
         self.process_move(reply, board)
 
     def thoughts(self):
+        """
+        Return HTML to describe the inner thoughts
+        """
         result = '<div style="text-align: left;font-size:14px"><br/>'
         result += f"<b>Evaluation:</b><br/>{self.evaluation}<br/><br/>"
         result += f"<b>Threats:</b><br/>{self.threats}<br/><br/>"
@@ -122,5 +143,8 @@ You must pick one of these letters for your move_column: {legal_moves}{illegal_m
         result += "</div>"
         return result
 
-    def switch_model(self, new_model_name):
+    def switch_model(self, new_model_name: str):
+        """
+        Change the underlying LLM to the new model
+        """
         self.llm = LLM.create(new_model_name)

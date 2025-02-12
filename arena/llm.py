@@ -48,7 +48,11 @@ class LLM(ABC):
         return result
 
     def protected_send(self, system: str, user: str, max_tokens: int = 3000) -> str:
-        retries = 5
+        """
+        Wrap the send call in an exception handler, giving the LLM 3 chances in total, in case
+        of overload errors. If it fails 3 times, then it forfeits!
+        """
+        retries = 3
         while retries:
             retries -= 1
             try:
@@ -61,9 +65,27 @@ class LLM(ABC):
         return "{}"
 
     def _send(self, system: str, user: str, max_tokens: int = 3000) -> str:
-        raise NotImplementedError
+        """
+        Send a message to the model - this default implementation follows the OpenAI API structure
+        :param system: the context in which this message is to be taken
+        :param user: the prompt
+        :param max_tokens: max number of tokens to generate
+        :return: the response from the AI
+        """
+        response = self.client.chat.completions.create(
+            model=self.api_model_name(),
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            response_format={"type": "json_object"},
+        )
+        return response.choices[0].message.content
 
-    def api_model_name(self):
+    def api_model_name(self) -> str:
+        """
+        Return the actual model_name to be used in the call to the API; strip out anything after a space
+        """
         if " " in self.model_name:
             return self.model_name.split(" ")[0]
         else:
@@ -83,6 +105,10 @@ class LLM(ABC):
 
     @classmethod
     def all_model_names(cls) -> List[str]:
+        """
+        Return a list of all the model names supported.
+        Use the ones specified in the model_map, but also check if there's an env variable set that restricts the models
+        """
         models = list(cls.model_map().keys())
         allowed = os.getenv("MODELS")
         if allowed:
@@ -153,28 +179,10 @@ class GPT(LLM):
         super().__init__(model_name, temperature)
         self.client = OpenAI()
 
-    def _send(self, system: str, user: str, max_tokens: int = 3000) -> str:
-        """
-        Send a message to GPT
-        :param system: the context in which this message is to be taken
-        :param user: the prompt
-        :param max_tokens: max number of tokens to generate
-        :return: the response from the AI
-        """
-        response = self.client.chat.completions.create(
-            model=self.api_model_name(),
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            response_format={"type": "json_object"},
-        )
-        return response.choices[0].message.content
-
 
 class O1(LLM):
     """
-    A class to act as an interface to the remote AI, in this case GPT
+    A class to act as an interface to the remote AI, in this case O1
     """
 
     model_names = ["o1-mini"]
@@ -188,7 +196,7 @@ class O1(LLM):
 
     def _send(self, system: str, user: str, max_tokens: int = 3000) -> str:
         """
-        Send a message to GPT
+        Send a message to O1
         :param system: the context in which this message is to be taken
         :param user: the prompt
         :param max_tokens: max number of tokens to generate
@@ -206,7 +214,7 @@ class O1(LLM):
 
 class O3(LLM):
     """
-    A class to act as an interface to the remote AI, in this case GPT
+    A class to act as an interface to the remote AI, in this case O3
     """
 
     model_names = ["o3-mini"]
@@ -225,7 +233,7 @@ class O3(LLM):
 
     def _send(self, system: str, user: str, max_tokens: int = 3000) -> str:
         """
-        Send a message to GPT
+        Send a message to O3
         :param system: the context in which this message is to be taken
         :param user: the prompt
         :param max_tokens: max number of tokens to generate
@@ -241,6 +249,25 @@ class O3(LLM):
         return response.choices[0].message.content
 
 
+class Gemini(LLM):
+    """
+    A class to act as an interface to the remote AI, in this case Gemini
+    """
+
+    model_names = ["gemini-2.0-flash", "gemini-1.5-flash"]
+
+    def __init__(self, model_name: str, temperature: float):
+        """
+        Create a new instance of the OpenAI client
+        """
+        super().__init__(model_name, temperature)
+        google_api_key = os.getenv("GOOGLE_API_KEY")
+        self.client = OpenAI(
+            api_key=google_api_key,
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        )
+
+
 class Ollama(LLM):
     """
     A class to act as an interface to the remote AI, in this case Ollama via the OpenAI client
@@ -250,7 +277,7 @@ class Ollama(LLM):
 
     def __init__(self, model_name: str, temperature: float):
         """
-        Create a new instance of the OpenAI client
+        Create a new instance of the OpenAI client for Ollama
         """
         super().__init__(model_name, temperature)
         self.client = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
@@ -295,25 +322,6 @@ class DeepSeekAPI(LLM):
         self.client = OpenAI(
             api_key=deepseek_api_key, base_url="https://api.deepseek.com"
         )
-
-    def _send(self, system: str, user: str, max_tokens: int = 3000) -> str:
-        """
-        Send a message to DeepSeek
-        :param system: the context in which this message is to be taken
-        :param user: the prompt
-        :param max_tokens: max number of tokens to generate
-        :return: the response from the AI
-        """
-
-        response = self.client.chat.completions.create(
-            model=self.api_model_name(),
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-        )
-        reply = response.choices[0].message.content
-        return reply
 
 
 class DeepSeekLocal(LLM):
@@ -367,25 +375,7 @@ class GroqAPI(LLM):
 
     def __init__(self, model_name: str, temperature: float):
         """
-        Create a new instance of the OpenAI client
+        Create a new instance of the Groq client
         """
         super().__init__(model_name, temperature)
         self.client = Groq()
-
-    def _send(self, system: str, user: str, max_tokens: int = 3000) -> str:
-        """
-        Send a message to GPT
-        :param system: the context in which this message is to be taken
-        :param user: the prompt
-        :param max_tokens: max number of tokens to generate
-        :return: the response from the AI
-        """
-        response = self.client.chat.completions.create(
-            model=self.api_model_name(),
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            response_format={"type": "json_object"},
-        )
-        return response.choices[0].message.content
