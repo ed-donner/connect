@@ -81,19 +81,15 @@ def yellow_model_callback(game, new_model_name):
 def player_section(name, default):
     all_model_names = LLM.all_model_names()
     with gr.Row():
-        gr.Markdown(
-            f'<div style="text-align: center;font-size:18px">{name} Player</div>'
-        )
+        gr.HTML(f'<div style="text-align: center;font-size:18px">{name} Player</div>')
     with gr.Row():
         dropdown = gr.Dropdown(
             all_model_names, value=default, label="LLM", interactive=True
         )
     with gr.Row():
-        gr.Markdown(
-            f'<div style="text-align: center;font-size:16px">Inner thoughts</div>'
-        )
+        gr.HTML('<div style="text-align: center;font-size:16px">Inner thoughts</div>')
     with gr.Row():
-        thoughts = gr.Markdown(label="Thoughts")
+        thoughts = gr.HTML(label="Thoughts")
     return thoughts, dropdown
 
 
@@ -108,7 +104,7 @@ def make_display():
         game = gr.State()
 
         with gr.Row():
-            gr.Markdown(
+            gr.HTML(
                 '<div style="text-align: center;font-size:24px">Four-in-a-row LLM Showdown</div>'
             )
         with gr.Row():
@@ -116,7 +112,7 @@ def make_display():
                 red_thoughts, red_dropdown = player_section("Red", "gpt-4o-mini")
             with gr.Column(scale=2):
                 with gr.Row():
-                    message = gr.Markdown(
+                    message = gr.HTML(
                         '<div style="text-align: center;font-size:18px">The Board</div>'
                     )
                 with gr.Row():
