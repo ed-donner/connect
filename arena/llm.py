@@ -49,7 +49,6 @@ class LLM(ABC):
 
     def protected_send(self, system: str, user: str, max_tokens: int = 3000) -> str:
         retries = 5
-        done = False
         while retries:
             retries -= 1
             try:
@@ -62,7 +61,13 @@ class LLM(ABC):
         return "{}"
 
     def _send(self, system: str, user: str, max_tokens: int = 3000) -> str:
-        pass
+        raise NotImplementedError
+
+    def api_model_name(self):
+        if " " in self.model_name:
+            return self.model_name.split(" ")[0]
+        else:
+            return self.model_name
 
     @classmethod
     def model_map(cls) -> Dict[str, Type[Self]]:
@@ -78,7 +83,13 @@ class LLM(ABC):
 
     @classmethod
     def all_model_names(cls) -> List[str]:
-        return cls.model_map().keys()
+        models = list(cls.model_map().keys())
+        allowed = os.getenv("MODELS")
+        if allowed:
+            allowed_models = allowed.split(",")
+            return [model for model in models if model in allowed_models]
+        else:
+            return models
 
     @classmethod
     def create(cls, model_name: str, temperature: float = 0.5) -> Self:
@@ -117,7 +128,7 @@ class Claude(LLM):
         :return: the response from the AI
         """
         response = self.client.messages.create(
-            model=self.model_name,
+            model=self.api_model_name(),
             max_tokens=max_tokens,
             temperature=self.temperature,
             system=system,
@@ -151,7 +162,7 @@ class GPT(LLM):
         :return: the response from the AI
         """
         response = self.client.chat.completions.create(
-            model=self.model_name,
+            model=self.api_model_name(),
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -185,7 +196,7 @@ class O1(LLM):
         """
         message = system + "\n\n" + user
         response = self.client.chat.completions.create(
-            model=self.model_name,
+            model=self.api_model_name(),
             messages=[
                 {"role": "user", "content": message},
             ],
@@ -222,7 +233,7 @@ class O3(LLM):
         """
         message = system + "\n\n" + user
         response = self.client.chat.completions.create(
-            model=self.model_name,
+            model=self.api_model_name(),
             messages=[
                 {"role": "user", "content": message},
             ],
@@ -241,7 +252,7 @@ class Ollama(LLM):
         """
         Create a new instance of the OpenAI client
         """
-        super().__init__(model_name.replace(" local", ""), temperature)
+        super().__init__(model_name, temperature)
         self.client = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
 
     def _send(self, system: str, user: str, max_tokens: int = 3000) -> str:
@@ -254,7 +265,7 @@ class Ollama(LLM):
         """
 
         response = self.client.chat.completions.create(
-            model=self.model_name,
+            model=self.api_model_name(),
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -273,15 +284,13 @@ class DeepSeekAPI(LLM):
     A class to act as an interface to the remote AI, in this case DeepSeek via the OpenAI client
     """
 
-    model_names = ["deepseek-V3", "deepseek-r1"]
-
-    model_map = {"deepseek-V3": "deepseek-chat", "deepseek-r1": "deepseek-reasoner"}
+    model_names = ["deepseek-chat V3", "deepseek-reasoner R1"]
 
     def __init__(self, model_name: str, temperature: float):
         """
         Create a new instance of the OpenAI client
         """
-        super().__init__(self.model_map[model_name], temperature)
+        super().__init__(model_name, temperature)
         deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
         self.client = OpenAI(
             api_key=deepseek_api_key, base_url="https://api.deepseek.com"
@@ -297,12 +306,11 @@ class DeepSeekAPI(LLM):
         """
 
         response = self.client.chat.completions.create(
-            model=self.model_name,
+            model=self.api_model_name(),
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            # response_format={"type": "json_object"},
         )
         reply = response.choices[0].message.content
         return reply
@@ -319,7 +327,7 @@ class DeepSeekLocal(LLM):
         """
         Create a new instance of the OpenAI client
         """
-        super().__init__(model_name.replace(" local", ""), temperature)
+        super().__init__(model_name, temperature)
         self.client = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
 
     def _send(self, system: str, user: str, max_tokens: int = 3000) -> str:
@@ -333,7 +341,7 @@ class DeepSeekLocal(LLM):
         system += "\nImportant: avoid overthinking. Think briefly and decisively. The final response must follow the given json format or you forfeit the game. Do not overthink. Respond with json."
         user += "\nImportant: avoid overthinking. Think briefly and decisively. The final response must follow the given json format or you forfeit the game. Do not overthink. Respond with json."
         response = self.client.chat.completions.create(
-            model=self.model_name,
+            model=self.api_model_name(),
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -361,7 +369,7 @@ class GroqAPI(LLM):
         """
         Create a new instance of the OpenAI client
         """
-        super().__init__(model_name[:-9], temperature)
+        super().__init__(model_name, temperature)
         self.client = Groq()
 
     def _send(self, system: str, user: str, max_tokens: int = 3000) -> str:
@@ -373,7 +381,7 @@ class GroqAPI(LLM):
         :return: the response from the AI
         """
         response = self.client.chat.completions.create(
-            model=self.model_name,
+            model=self.api_model_name(),
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},

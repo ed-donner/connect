@@ -3,7 +3,6 @@ from arena.board import RED, YELLOW
 from arena.llm import LLM
 import gradio as gr
 
-all_model_names = LLM.all_model_names()
 
 css = "footer{display:none !important}"
 
@@ -80,6 +79,7 @@ def yellow_model_callback(game, new_model_name):
 
 
 def player_section(name, default):
+    all_model_names = LLM.all_model_names()
     with gr.Row():
         gr.Markdown(
             f'<div style="text-align: center;font-size:18px">{name} Player</div>'
@@ -113,7 +113,7 @@ def make_display():
             )
         with gr.Row():
             with gr.Column(scale=1):
-                red_thoughts, red_dropdown = player_section("Red", "gpt-4o")
+                red_thoughts, red_dropdown = player_section("Red", "gpt-4o-mini")
             with gr.Column(scale=2):
                 with gr.Row():
                     message = gr.Markdown(

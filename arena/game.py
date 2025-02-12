@@ -1,12 +1,10 @@
 from arena.board import Board, RED, YELLOW, EMPTY, pieces
 from arena.player import Player
-from dotenv import load_dotenv
 
 
 class Game:
 
     def __init__(self, model_red, model_yellow):
-        load_dotenv(override=True)
         self.board = Board()
         self.players = {
             RED: Player(model_red, RED),
