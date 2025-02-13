@@ -34,13 +34,8 @@ class LLM(ABC):
         :param max_tokens: max number of tokens to generate
         :return: the response from the AI
         """
-        print("_____")
-        print(f"Calling {self.model_name}")
-        print("System prompt:\n" + system)
-        print("User prompt:\n" + user)
+
         result = self.protected_send(system, user, max_tokens)
-        print("Response:\n" + result)
-        print("_____")
         left = result.find("{")
         right = result.rfind("}")
         if left > -1 and right > -1:
@@ -58,9 +53,9 @@ class LLM(ABC):
             try:
                 return self._send(system, user, max_tokens)
             except Exception as e:
-                print(f"Exception on calling LLM of {e}")
+                logging.error(f"Exception on calling LLM of {e}")
                 if retries:
-                    print("Waiting 2s and retrying")
+                    logging.warning("Waiting 2s and retrying")
                     time.sleep(2)
         return "{}"
 
@@ -301,7 +296,9 @@ class Ollama(LLM):
         )
         reply = response.choices[0].message.content
         if "</think>" in reply:
-            print("Thoughts:\n" + reply.split("</think>")[0].replace("<think>", ""))
+            logging.info(
+                "Thoughts:\n" + reply.split("</think>")[0].replace("<think>", "")
+            )
             reply = reply.split("</think>")[1]
         return reply
 
@@ -357,7 +354,9 @@ class DeepSeekLocal(LLM):
         )
         reply = response.choices[0].message.content
         if "</think>" in reply:
-            print("Thoughts:\n" + reply.split("</think>")[0].replace("<think>", ""))
+            logging.info(
+                "Thoughts:\n" + reply.split("</think>")[0].replace("<think>", "")
+            )
             reply = reply.split("</think>")[1]
         return reply
 

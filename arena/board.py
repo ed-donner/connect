@@ -6,7 +6,7 @@ YELLOW = -1
 EMPTY = 0
 show = {EMPTY: "⚪️", RED: "🔴", YELLOW: "🟡"}
 pieces = {EMPTY: "", RED: "red", YELLOW: "yellow"}
-simple = {EMPTY: ".", RED: "R", YELLOW: "Y"}
+simple = {EMPTY: "_", RED: "R", YELLOW: "Y"}
 cols = "ABCDEFG"
 
 
@@ -85,10 +85,10 @@ class Board:
         """
         An alternative representation, used in prompting so that the LLM sees this 2 ways
         """
-        result = "ABCDEFG\n"
+        result = " A B C D E F G\n"
         for y in range(6):
             for x in range(7):
-                result += simple[self.cells[5 - y][x]]
+                result += " " + simple[self.cells[5 - y][x]]
             result += "\n"
         return result
 

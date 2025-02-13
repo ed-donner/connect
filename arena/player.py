@@ -2,6 +2,7 @@ from arena.llm import LLM
 from arena.board import pieces, cols
 import json
 import random
+import logging
 
 
 class Player:
@@ -52,7 +53,7 @@ Here is the current board, with row 1 at the bottom of the board:
 
 {board.json()}
 
-Here's another way of looking at the board visually, where R represents a red counter and Y for a yellow counter.
+Here's another way of looking at the board visually, where R represents a red counter, Y for a yellow counter, and _ represents an empty square.
 
 {board.alternative()}
 
@@ -110,7 +111,8 @@ You must pick one of these letters for your move_column: {legal_moves}{illegal_m
             self.opportunities = result.get("opportunities") or ""
             self.strategy = result.get("strategy") or ""
         except Exception as e:
-            print(f"Exception {e}")
+            logging.error(f"Exception {e}")
+            logging.exception(e)
             board.forfeit = True
             board.winner = -1 * board.player
 
