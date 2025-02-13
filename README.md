@@ -21,8 +21,8 @@ short_description: Arena for playing Four-in-a-row between LLMs
 It has been great fun making this Arena and watching LLMs duke it out!
 
 Quick links:
+- The [Live Arena](https://edwarddonner.com/connect-four/)  courtesy of amazing HuggingFace Spaces
 - The [GitHub repo](https://github.com/ed-donner/connect) for the code
-- The [HuggingFace Spaces](https://huggingface.co/spaces/ed-donner/connect) where it's running
 - My [LinkedIn](https://www.linkedin.com/in/eddonner/) - I love connecting!
 
 If you'd like to learn more about this:  
@@ -36,6 +36,8 @@ If you'd like to learn more about this:
 3. Create a python virtualenv with `python -m venv venv`
 4. Activate your environment with either `venv\Scripts\activate` on Windows, or `source venv/bin/activate` on Mac/Linux
 5. Then run `pip install -r requirements.txt` to install the packages
+
+If you wish to play with the prototype, run `jupyter lab` to launch the lab then look at the notebook **prototype.ipynb**.
 
 ## Setting up your API keys
 

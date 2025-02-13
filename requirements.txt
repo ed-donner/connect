@@ -9,3 +9,4 @@ anthropic
 groq
 black
 pymongo
+pandas

@@ -2,6 +2,7 @@ from arena.game import Game
 from arena.board import RED, YELLOW
 from arena.llm import LLM
 import gradio as gr
+import pandas as pd
 
 
 css = """
@@ -35,17 +36,25 @@ def message_html(game) -> str:
 
 def format_records_for_table(games):
     """
-    Turn the results objects into a list of lists for the Gradio Dataframe
+    Turn the results objects into a pandas DataFrame for the Gradio Dataframe
     """
-    return [
+    df = pd.DataFrame(
         [
-            game.when,
-            game.red_player,
-            game.yellow_player,
-            "Red" if game.red_won else "Yellow" if game.yellow_won else "Draw",
-        ]
-        for game in reversed(games)
-    ]
+            [
+                game.when,
+                game.red_player,
+                game.yellow_player,
+                "Red" if game.red_won else "Yellow" if game.yellow_won else "Draw",
+            ]
+            for game in reversed(games)
+        ],
+        columns=["When", "Red Player", "Yellow Player", "Winner"],
+    )
+
+    # Remove microseconds while preserving datetime format
+    df["When"] = pd.to_datetime(df["When"]).dt.floor("s")
+
+    return df
 
 
 def format_ratings_for_table(ratings):
