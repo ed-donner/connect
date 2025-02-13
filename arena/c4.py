@@ -215,6 +215,11 @@ def make_display():
                                 run_button = gr.Button("Run game", variant="primary")
                             with gr.Column(scale=1):
                                 reset_button = gr.Button("Start Over", variant="stop")
+                        with gr.Row():
+                            gr.HTML(
+                        '<div style="text-align: center;font-size:16px">See the <a href="https://youtu.be/0OF-ChlKOQY" target="_blank" rel="noopener noreferrer">video walkthrough</a> of the code and <a href="https://github.com/ed-donner/connect" target="_blank" rel="noopener noreferrer">clone</a> the repo</div>'
+                    )
+                            
                     with gr.Column(scale=1):
                         yellow_thoughts, yellow_dropdown = player_section(
                             "Yellow", "claude-3-5-sonnet-latest"
@@ -243,6 +248,10 @@ def make_display():
                             max_height=800,
                             elem_classes=["dataframe-fix"],
                         )
+                with gr.Row():
+                    gr.HTML(
+                        '<div style="text-align: center;font-size:16px">See the <a href="https://youtu.be/0OF-ChlKOQY" target="_blank" rel="noopener noreferrer">video walkthrough</a> of the code and <a href="https://github.com/ed-donner/connect" target="_blank" rel="noopener noreferrer">clone</a> the repo</div>'
+                    )
 
         blocks.load(
             load_callback,

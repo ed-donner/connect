@@ -38,7 +38,9 @@ If you'd like to learn more about this:
 4. Activate your environment with either `venv\Scripts\activate` on Windows, or `source venv/bin/activate` on Mac/Linux
 5. Then run `pip install -r requirements.txt` to install the packages
 
-If you wish to play with the prototype, run `jupyter lab` to launch the lab then look at the notebook **prototype.ipynb**.
+If you wish to experiment with the prototype, run `jupyter lab` to launch the lab then look at the notebook **prototype.ipynb**.
+
+To launch the app locally, run `python app.py`
 
 ## Setting up your API keys
 
