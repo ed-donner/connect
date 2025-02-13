@@ -23,6 +23,7 @@ It has been great fun making this Arena and watching LLMs duke it out!
 Quick links:
 - The [Live Arena](https://edwarddonner.com/connect-four/)  courtesy of amazing HuggingFace Spaces
 - The [GitHub repo](https://github.com/ed-donner/connect) for the code
+- My [video walkthrough](https://youtu.be/0OF-ChlKOQY) of the code
 - My [LinkedIn](https://www.linkedin.com/in/eddonner/) - I love connecting!
 
 If you'd like to learn more about this:  
