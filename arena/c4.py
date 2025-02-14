@@ -217,7 +217,7 @@ def make_display():
                                 reset_button = gr.Button("Start Over", variant="stop")
                         with gr.Row():
                             gr.HTML(
-                        '<div style="text-align: center;font-size:16px">See the <a href="https://youtu.be/0OF-ChlKOQY" target="_blank" rel="noopener noreferrer">video walkthrough</a> of the code and <a href="https://github.com/ed-donner/connect" target="_blank" rel="noopener noreferrer">clone</a> the repo</div>'
+                        '<div style="text-align: center;font-size:16px">See the <a href="https://youtu.be/0OF-ChlKOQY">video walkthrough</a> of the code and <a href="https://github.com/ed-donner/connect">clone</a> the repo</div>'
                     )
                             
                     with gr.Column(scale=1):
@@ -250,7 +250,7 @@ def make_display():
                         )
                 with gr.Row():
                     gr.HTML(
-                        '<div style="text-align: center;font-size:16px">See the <a href="https://youtu.be/0OF-ChlKOQY" target="_blank" rel="noopener noreferrer">video walkthrough</a> of the code and <a href="https://github.com/ed-donner/connect" target="_blank" rel="noopener noreferrer">clone</a> the repo</div>'
+                        '<div style="text-align: center;font-size:16px">See the <a href="https://youtu.be/0OF-ChlKOQY">video walkthrough</a> of the code and <a href="https://github.com/ed-donner/connect">clone</a> the repo</div>'
                     )
 
         blocks.load(
