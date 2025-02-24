@@ -131,7 +131,7 @@ class Claude(LLM):
     A class to act as an interface to the remote AI, in this case Claude
     """
 
-    model_names = ["claude-3-5-sonnet-latest"]
+    model_names = ["claude-3-5-sonnet-latest", "claude-3-7-sonnet-latest"]
 
     def __init__(self, model_name: str, temperature: float):
         """
