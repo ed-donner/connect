@@ -217,12 +217,12 @@ def make_display():
                                 reset_button = gr.Button("Start Over", variant="stop")
                         with gr.Row():
                             gr.HTML(
-                        '<div style="text-align: center;font-size:16px">See the <a href="https://youtu.be/0OF-ChlKOQY">video walkthrough</a> of the code and <a href="https://github.com/ed-donner/connect">clone</a> the repo</div>'
-                    )
-                            
+                                '<div style="text-align: center;font-size:16px">See the <a href="https://youtu.be/0OF-ChlKOQY">video walkthrough</a> of the code and <a href="https://github.com/ed-donner/connect">clone</a> the repo</div>'
+                            )
+
                     with gr.Column(scale=1):
                         yellow_thoughts, yellow_dropdown = player_section(
-                            "Yellow", "claude-3-5-sonnet-latest"
+                            "Yellow", "claude-3-7-sonnet-latest"
                         )
             with gr.TabItem("Leaderboard") as leaderboard_tab:
                 with gr.Row():
