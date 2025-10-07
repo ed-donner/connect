@@ -29,9 +29,7 @@ def message_html(game) -> str:
     """
     Return the message for the top of the UI
     """
-    return (
-        f'<div style="text-align: center;font-size:18px">{game.board.message()}</div>'
-    )
+    return f'<div style="text-align: center;font-size:18px">{game.board.message()}</div>'
 
 
 def format_records_for_table(games):
@@ -120,19 +118,40 @@ def run_callback(game):
     disabled = gr.Button(interactive=False)
     game.reset()
     message = message_html(game)
-    yield game, game.board.svg(), message, game.thoughts(RED), game.thoughts(
-        YELLOW
-    ), disabled, disabled, disabled
+    yield (
+        game,
+        game.board.svg(),
+        message,
+        game.thoughts(RED),
+        game.thoughts(YELLOW),
+        disabled,
+        disabled,
+        disabled,
+    )
     while game.board.is_active():
         game.move()
         message = message_html(game)
-        yield game, game.board.svg(), message, game.thoughts(RED), game.thoughts(
-            YELLOW
-        ), disabled, disabled, disabled
+        yield (
+            game,
+            game.board.svg(),
+            message,
+            game.thoughts(RED),
+            game.thoughts(YELLOW),
+            disabled,
+            disabled,
+            disabled,
+        )
     game.record()
-    yield game, game.board.svg(), message, game.thoughts(RED), game.thoughts(
-        YELLOW
-    ), disabled, disabled, enabled
+    yield (
+        game,
+        game.board.svg(),
+        message,
+        game.thoughts(RED),
+        game.thoughts(YELLOW),
+        disabled,
+        disabled,
+        enabled,
+    )
 
 
 def model_callback(player_name, game, new_model_name):
@@ -166,9 +185,7 @@ def player_section(name, default):
     with gr.Row():
         gr.HTML(f'<div style="text-align: center;font-size:18px">{name} Player</div>')
     with gr.Row():
-        dropdown = gr.Dropdown(
-            all_model_names, value=default, label="LLM", interactive=True
-        )
+        dropdown = gr.Dropdown(all_model_names, value=default, label="LLM", interactive=True)
     with gr.Row():
         gr.HTML('<div style="text-align: center;font-size:16px">Inner thoughts</div>')
     with gr.Row():
@@ -186,21 +203,17 @@ def make_display():
         js=js,
         theme=gr.themes.Default(primary_hue="sky"),
     ) as blocks:
-
         game = gr.State()
 
         with gr.Tabs():
             with gr.TabItem("Game"):
-
                 with gr.Row():
                     gr.HTML(
                         '<div style="text-align: center;font-size:24px">Four-in-a-row LLM Showdown</div>'
                     )
                 with gr.Row():
                     with gr.Column(scale=1):
-                        red_thoughts, red_dropdown = player_section(
-                            "Red", "gpt-4o-mini"
-                        )
+                        red_thoughts, red_dropdown = player_section("Red", "gpt-oss-120b via Groq")
                     with gr.Column(scale=2):
                         with gr.Row():
                             message = gr.HTML(
@@ -222,7 +235,7 @@ def make_display():
 
                     with gr.Column(scale=1):
                         yellow_thoughts, yellow_dropdown = player_section(
-                            "Yellow", "claude-3-7-sonnet-latest"
+                            "Yellow", "gemini-2.5-flash-lite"
                         )
             with gr.TabItem("Leaderboard") as leaderboard_tab:
                 with gr.Row():
@@ -280,9 +293,7 @@ def make_display():
                 run_button,
             ],
         )
-        red_dropdown.change(
-            red_model_callback, inputs=[game, red_dropdown], outputs=[game]
-        )
+        red_dropdown.change(red_model_callback, inputs=[game, red_dropdown], outputs=[game])
         yellow_dropdown.change(
             yellow_model_callback, inputs=[game, yellow_dropdown], outputs=[game]
         )

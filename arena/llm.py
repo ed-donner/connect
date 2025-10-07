@@ -25,6 +25,7 @@ class LLM(ABC):
         self.model_name = model_name
         self.client = None
         self.temperature = temperature
+        self.reasoning_effort = None
 
     def send(self, system: str, user: str, max_tokens: int = 3000) -> str:
         """
@@ -67,14 +68,25 @@ class LLM(ABC):
         :param max_tokens: max number of tokens to generate
         :return: the response from the AI
         """
-        response = self.client.chat.completions.create(
-            model=self.api_model_name(),
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            response_format={"type": "json_object"},
-        )
+        if self.reasoning_effort:
+            response = self.client.chat.completions.create(
+                model=self.api_model_name(),
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                response_format={"type": "json_object"},
+                reasoning_effort=self.reasoning_effort,
+            )
+        else:
+            response = self.client.chat.completions.create(
+                model=self.api_model_name(),
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                response_format={"type": "json_object"},
+            )
         return response.choices[0].message.content
 
     def api_model_name(self) -> str:
@@ -131,7 +143,12 @@ class Claude(LLM):
     A class to act as an interface to the remote AI, in this case Claude
     """
 
-    model_names = ["claude-3-5-sonnet-latest", "claude-3-7-sonnet-latest"]
+    model_names = [
+        "claude-3-5-sonnet-latest",
+        "claude-3-7-sonnet-latest",
+        "claude-opus-4-1-20250805",
+        "claude-sonnet-4-5-20250929",
+    ]
 
     def __init__(self, model_name: str, temperature: float):
         """
@@ -165,7 +182,7 @@ class GPT(LLM):
     A class to act as an interface to the remote AI, in this case GPT
     """
 
-    model_names = ["gpt-4o-mini", "gpt-4o"]
+    model_names = ["gpt-4o-mini", "gpt-4o", "gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-4.1-mini"]
 
     def __init__(self, model_name: str, temperature: float):
         """
@@ -173,6 +190,8 @@ class GPT(LLM):
         """
         super().__init__(model_name, temperature)
         self.client = OpenAI()
+        if "gpt-5" in model_name:
+            self.reasoning_effort = "low"
 
 
 class O1(LLM):
@@ -249,7 +268,13 @@ class Gemini(LLM):
     A class to act as an interface to the remote AI, in this case Gemini
     """
 
-    model_names = ["gemini-2.0-flash", "gemini-1.5-flash"]
+    model_names = [
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-pro",
+    ]
 
     def __init__(self, model_name: str, temperature: float):
         """
@@ -296,9 +321,7 @@ class Ollama(LLM):
         )
         reply = response.choices[0].message.content
         if "</think>" in reply:
-            logging.info(
-                "Thoughts:\n" + reply.split("</think>")[0].replace("<think>", "")
-            )
+            logging.info("Thoughts:\n" + reply.split("</think>")[0].replace("<think>", ""))
             reply = reply.split("</think>")[1]
         return reply
 
@@ -316,9 +339,7 @@ class DeepSeekAPI(LLM):
         """
         super().__init__(model_name, temperature)
         deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
-        self.client = OpenAI(
-            api_key=deepseek_api_key, base_url="https://api.deepseek.com"
-        )
+        self.client = OpenAI(api_key=deepseek_api_key, base_url="https://api.deepseek.com")
 
 
 class DeepSeekLocal(LLM):
@@ -354,9 +375,7 @@ class DeepSeekLocal(LLM):
         )
         reply = response.choices[0].message.content
         if "</think>" in reply:
-            logging.info(
-                "Thoughts:\n" + reply.split("</think>")[0].replace("<think>", "")
-            )
+            logging.info("Thoughts:\n" + reply.split("</think>")[0].replace("<think>", ""))
             reply = reply.split("</think>")[1]
         return reply
 
@@ -370,6 +389,7 @@ class GroqAPI(LLM):
         "deepseek-r1-distill-llama-70b via Groq",
         "llama-3.3-70b-versatile via Groq",
         "mixtral-8x7b-32768 via Groq",
+        "openai/gpt-oss-120b via Groq",
     ]
 
     def __init__(self, model_name: str, temperature: float):
