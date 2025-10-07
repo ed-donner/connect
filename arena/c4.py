@@ -213,7 +213,9 @@ def make_display():
                     )
                 with gr.Row():
                     with gr.Column(scale=1):
-                        red_thoughts, red_dropdown = player_section("Red", "gpt-oss-120b via Groq")
+                        red_thoughts, red_dropdown = player_section(
+                            "Red", "openai/gpt-oss-120b via Groq"
+                        )
                     with gr.Column(scale=2):
                         with gr.Row():
                             message = gr.HTML(
