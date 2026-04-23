@@ -30,13 +30,12 @@ Think carefully about threats, opportunities, and strategy before choosing your 
 
     def user(self, board) -> str:
         return f"""It is your turn to make a move as {pieces[self.color]}.
-Here is the current board, with row 1 at the bottom:
 
-{board.json()}
+Current board (R = red, Y = yellow, . = empty):
 
-And here is the same board visually — R is a red counter, Y is a yellow counter, _ is an empty square:
+{board.display()}
 
-{board.alternative()}
+{board.next_drops()}
 
 Pick the column you want to drop your counter into."""
 

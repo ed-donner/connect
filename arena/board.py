@@ -6,7 +6,7 @@ YELLOW = -1
 EMPTY = 0
 show = {EMPTY: "⚪️", RED: "🔴", YELLOW: "🟡"}
 pieces = {EMPTY: "", RED: "red", YELLOW: "yellow"}
-simple = {EMPTY: "_", RED: "R", YELLOW: "Y"}
+simple = {EMPTY: ".", RED: "R", YELLOW: "Y"}
 cols = "ABCDEFG"
 
 
@@ -67,30 +67,32 @@ class Board:
         """
         return to_svg(self)
 
-    def json(self):
+    def display(self) -> str:
         """
-        Return a json representation
+        Single, labelled ASCII view used in LLM prompts. Row numbers on every
+        row and an explicit gravity hint at the bottom so the model doesn't
+        have to infer orientation.
         """
-        result = "{\n"
-        result += '    "Column names": ["A", "B", "C", "D", "E", "F", "G"],\n'
+        lines = ["     A  B  C  D  E  F  G"]
         for y in range(6):
-            result += f'    "Row {6-y}": ['
-            for x in range(7):
-                result += f'"{pieces[self.cells[5-y][x]]}", '
-            result = result[:-2] + "],\n"
-        result = result[:-2] + "\n}"
-        return result
+            row_num = 6 - y
+            cells = "  ".join(simple[self.cells[5 - y][x]] for x in range(7))
+            suffix = "    <- bottom (pieces stack upward)" if row_num == 1 else ""
+            lines.append(f"  {row_num}| {cells}{suffix}")
+        return "\n".join(lines)
 
-    def alternative(self):
+    def next_drops(self) -> str:
         """
-        An alternative representation, used in prompting so that the LLM sees this 2 ways
+        For every legal column, the row a new piece would land on. Saves the
+        model from re-counting empties per column (a frequent error for small
+        models).
         """
-        result = " A B C D E F G\n"
-        for y in range(6):
-            for x in range(7):
-                result += " " + simple[self.cells[5 - y][x]]
-            result += "\n"
-        return result
+        parts = []
+        for x in range(7):
+            h = self.height(x)
+            if h < 6:
+                parts.append(f"{cols[x]}→{h + 1}")
+        return "Next drop lands at: " + ", ".join(parts)
 
     def height(self, x: int) -> int:
         """
