@@ -149,6 +149,19 @@ class Board:
                     return winner
         return EMPTY
 
+    def winning_line_coords(self):
+        """
+        Return ((x1, y1), (x2, y2)) of the first 4-in-a-row found on the board,
+        in board coordinates (x: 0..6 left-to-right, y: 0..5 bottom-to-top),
+        or None if there is no 4-in-a-row.
+        """
+        for y in range(6):
+            for x in range(7):
+                for dx, dy in ((0, 1), (1, 1), (1, 0), (1, -1)):
+                    if self.winning_line(x, y, dx, dy):
+                        return ((x, y), (x + 3 * dx, y + 3 * dy))
+        return None
+
     def move(self, x: int):
         """
         Make a move in the given column
@@ -158,7 +171,7 @@ class Board:
         self.latest_x, self.latest_y = x, y
         if winner := self.wins():
             self.winner = winner
-        elif not self.legal_moves:
+        elif not self.legal_moves():
             self.draw = True
         else:
             self.player = -1 * self.player

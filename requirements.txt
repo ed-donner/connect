@@ -2,11 +2,9 @@ python-dotenv
 jupyterlab
 ipywidgets
 urllib3
-openai
 gradio
-google.generativeai
-anthropic
-groq
+litellm
+pydantic
 black
 pymongo
 pandas

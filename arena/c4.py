@@ -16,11 +16,84 @@ footer{display:none !important}
 js = """
 function refresh() {
     const url = new URL(window.location);
-
     if (url.searchParams.get('__theme') !== 'dark') {
         url.searchParams.set('__theme', 'dark');
         window.location.href = url.href;
+        return;
     }
+
+    // --- Drop sound + animation ---------------------------------------------
+    // Triggered from board_view.py via an invisible <img onload="window.onDrop()">
+    // injected into the board HTML on every render where a new piece exists.
+    // We deliberately drive both the drop animation and the clack from JS so
+    // the behaviour doesn't depend on Svelte/Gradio element-diffing.
+
+    let audioCtx = null;
+    function ensureCtx() {
+        if (!audioCtx) {
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            } catch (e) { return null; }
+        }
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        return audioCtx;
+    }
+
+    function playClack() {
+        const ctx = ensureCtx();
+        if (!ctx) return;
+        const t0 = ctx.currentTime;
+
+        // Sharp attack: short filtered-noise transient.
+        const noiseBuf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 0.008), ctx.sampleRate);
+        const nd = noiseBuf.getChannelData(0);
+        for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+        const nSrc = ctx.createBufferSource();
+        nSrc.buffer = noiseBuf;
+        const nFilt = ctx.createBiquadFilter();
+        nFilt.type = 'bandpass'; nFilt.frequency.value = 2500; nFilt.Q.value = 1.2;
+        const nGain = ctx.createGain();
+        nGain.gain.setValueAtTime(0.6, t0);
+        nGain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.02);
+        nSrc.connect(nFilt); nFilt.connect(nGain); nGain.connect(ctx.destination);
+        nSrc.start(t0);
+
+        // Bright plastic ring: two sines in the upper mids, fast decay.
+        [{f: 1600, g: 0.22}, {f: 2200, g: 0.14}].forEach(({f, g}) => {
+            const osc = ctx.createOscillator();
+            const og = ctx.createGain();
+            osc.type = 'sine'; osc.frequency.value = f;
+            og.gain.setValueAtTime(g, t0);
+            og.gain.exponentialRampToValueAtTime(0.001, t0 + 0.16);
+            osc.connect(og); og.connect(ctx.destination);
+            osc.start(t0);
+            osc.stop(t0 + 0.18);
+        });
+    }
+
+    // Pre-prime the AudioContext on the user's first click so later autoplay
+    // works without further gesture.
+    window.addEventListener('click', ensureCtx);
+
+    window.onDrop = function () {
+        const pieces = document.querySelectorAll('.new-piece');
+        if (!pieces.length) return;
+        let played = false;
+        pieces.forEach(p => {
+            // Web Animations API: fresh animation on every call, independent
+            // of whether the DOM element was re-mounted or just re-rendered.
+            const anim = p.animate(
+                [
+                    { transform: 'translateY(-300px)' },
+                    { transform: 'translateY(0)' }
+                ],
+                { duration: 500, easing: 'cubic-bezier(0.95, 0.05, 1, 0.5)', fill: 'forwards' }
+            );
+            anim.onfinish = () => {
+                if (!played) { played = true; playClack(); }
+            };
+        });
+    };
 }
 """
 

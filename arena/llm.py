@@ -1,16 +1,46 @@
+"""
+LLM layer for the Connect 4 arena, built on LiteLLM.
+
+Single code path for OpenAI, Anthropic, and OpenRouter. Structured outputs via
+a Pydantic schema passed through `response_format`; LiteLLM implements this as
+tool-use under the hood for providers that lack native JSON-schema support.
+Anthropic calls stream (to dodge the 10-min non-streaming timeout at high
+max_tokens) and carry `thinking` + `output_config` so Opus 4.7 runs at full
+reasoning strength.
+"""
+
 from abc import ABC
-from anthropic import Anthropic
-from openai import OpenAI
-from groq import Groq
 import logging
-from typing import Dict, Type, Self, List
 import os
 import time
+from typing import Dict, List, Self, Type
+
+import litellm
 from dotenv import load_dotenv
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from pydantic import BaseModel
 
 load_dotenv(override=True)
 
+
+def _apply_output_config(self, data, model, optional_params):
+    """
+    Forward `output_config` to the Anthropic request body without LiteLLM's
+    stale model-name whitelist. LiteLLM hardcodes `effort='max'` as Opus-4.6-only,
+    but Opus 4.7 accepts it too. Let the Anthropic API be the source of truth.
+    """
+    output_config = optional_params.get("output_config")
+    if isinstance(output_config, dict) and output_config:
+        data["output_config"] = output_config
+
+
+AnthropicConfig._apply_output_config = _apply_output_config
+
 logger = logging.getLogger(__name__)
+
+ANTHROPIC_MAX_TOKENS = 64_000
+RETRIES = 3
+RETRY_DELAY_SECONDS = 2
 
 
 class LLMException(Exception):
@@ -18,388 +48,161 @@ class LLMException(Exception):
 
 
 class LLM(ABC):
-    """
-    An abstract superclass for interacting with LLMs - subclass for Claude and GPT
-    """
+    """Abstract superclass. Default `_send` is the OpenAI path via LiteLLM."""
 
-    model_names = []
+    model_names: List[str] = []
 
-    def __init__(self, model_name: str, temperature: float):
+    def __init__(self, model_name: str):
         self.model_name = model_name
-        self.client = None
-        self.temperature = temperature
-        self.reasoning_effort = None
 
-    def send(self, system: str, user: str, max_tokens: int = 3000) -> str:
-        """
-        Send a message
-        :param system: the context in which this message is to be taken
-        :param user: the prompt
-        :param max_tokens: max number of tokens to generate
-        :return: the response from the AI
-        """
+    def api_model_name(self) -> str:
+        """Strip the UI-only suffix after the first space."""
+        return self.model_name.split(" ", 1)[0]
 
-        result = self.protected_send(system, user, max_tokens)
-        left = result.find("{")
-        right = result.rfind("}")
-        if left > -1 and right > -1:
-            result = result[left : right + 1]
-        return result
-
-    def protected_send(self, system: str, user: str, max_tokens: int = 3000) -> str:
+    def send(self, system: str, user: str, schema_cls: Type[BaseModel]) -> BaseModel | None:
         """
-        Wrap the send call in an exception handler, giving the LLM 3 chances in total, in case
-        of overload errors. If it fails 3 times, then it forfeits!
+        Retry up to RETRIES times. Return a parsed Pydantic instance, or None
+        if every attempt fails. `None` is the forfeit signal for the caller.
         """
-        retries = 3
+        retries = RETRIES
         while retries:
             retries -= 1
             try:
-                return self._send(system, user, max_tokens)
+                return self._send(system, user, schema_cls)
             except Exception as e:
-                logging.error(f"Exception on calling LLM of {e}")
+                logger.error(f"LLM call failed for {self.model_name}: {e}")
                 if retries:
-                    logging.warning("Waiting 2s and retrying")
-                    time.sleep(2)
-        return "{}"
+                    time.sleep(RETRY_DELAY_SECONDS)
+        return None
 
-    def _send(self, system: str, user: str, max_tokens: int = 3000) -> str:
-        """
-        Send a message to the model - this default implementation follows the OpenAI API structure
-        :param system: the context in which this message is to be taken
-        :param user: the prompt
-        :param max_tokens: max number of tokens to generate
-        :return: the response from the AI
-        """
-        if self.reasoning_effort:
-            response = self.client.chat.completions.create(
-                model=self.api_model_name(),
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                response_format={"type": "json_object"},
-                reasoning_effort=self.reasoning_effort,
-            )
-        else:
-            response = self.client.chat.completions.create(
-                model=self.api_model_name(),
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                response_format={"type": "json_object"},
-            )
-        return response.choices[0].message.content
-
-    def api_model_name(self) -> str:
-        """
-        Return the actual model_name to be used in the call to the API; strip out anything after a space
-        """
-        if " " in self.model_name:
-            return self.model_name.split(" ")[0]
-        else:
-            return self.model_name
+    def _send(self, system: str, user: str, schema_cls: Type[BaseModel]) -> BaseModel:
+        """OpenAI path: no streaming, no max_tokens."""
+        response = litellm.completion(
+            model=self.api_model_name(),
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            response_format=schema_cls,
+        )
+        return _parse_message(response.choices[0].message, schema_cls)
 
     @classmethod
     def model_map(cls) -> Dict[str, Type[Self]]:
-        """
-        Generate a mapping of Model Names to LLM classes, by looking at all subclasses of this one
-        :return: a mapping dictionary from model name to LLM subclass
-        """
-        mapping = {}
-        for llm in cls.__subclasses__():
-            for model_name in llm.model_names:
-                mapping[model_name] = llm
+        mapping: Dict[str, Type[Self]] = {}
+        for subclass in cls.__subclasses__():
+            for model_name in subclass.model_names:
+                mapping[model_name] = subclass
         return mapping
 
     @classmethod
     def all_supported_model_names(cls) -> List[str]:
-        """
-        Return a list of all the model names supported by all subclasses of this one.
-        """
         return list(cls.model_map().keys())
 
     @classmethod
     def all_model_names(cls) -> List[str]:
-        """
-        Return a list of all the model names supported.
-        Use the ones specified in the model_map, but also check if there's an env variable set that restricts the models
-        """
         models = cls.all_supported_model_names()
         allowed = os.getenv("MODELS")
-        print(f"Allowed models: {allowed}")
         if allowed:
-            allowed_models = allowed.split(",")
-            return [model for model in allowed_models if model in models]
-        else:
-            return models
+            return [m for m in allowed.split(",") if m in models]
+        return models
 
     @classmethod
-    def create(cls, model_name: str, temperature: float = 0.5) -> Self:
-        """
-        Return an instance of a subclass that corresponds to this model_name
-        :param model_name: a string to describe this model
-        :param temperature: the creativity setting
-        :return: a new instance of a subclass of LLM
-        """
+    def create(cls, model_name: str) -> Self:
         subclass = cls.model_map().get(model_name)
         if not subclass:
-            raise LLMException(f"Unrecognized LLM model name specified: {model_name}")
-        return subclass(model_name, temperature)
+            raise LLMException(f"Unrecognized LLM model name: {model_name}")
+        return subclass(model_name)
+
+
+class GPT(LLM):
+    """OpenAI models. Inherits the default `_send`."""
+
+    model_names = ["gpt-5.4", "gpt-5", "gpt-5.4-mini", "gpt-5.4-nano"]
 
 
 class Claude(LLM):
     """
-    A class to act as an interface to the remote AI, in this case Claude
+    Anthropic models. Streams the response so we can set max_tokens high without
+    hitting the 10-min non-streaming timeout. For Opus 4.7 we additionally enable
+    adaptive thinking and `output_config={"effort": "max"}` so Opus runs at full
+    reasoning strength. Older Claude models (Sonnet 4.5, Haiku 4.5, Opus 4.1)
+    reject thinking when combined with tool_choice-forced structured outputs —
+    LiteLLM implements `response_format` via forced tool use — so we skip those
+    kwargs for them.
     """
 
     model_names = [
+        "claude-opus-4-7",
         "claude-opus-4-1-20250805",
         "claude-sonnet-4-5",
         "claude-haiku-4-5",
     ]
 
-    def __init__(self, model_name: str, temperature: float):
-        """
-        Create a new instance of the Anthropic client
-        """
-        super().__init__(model_name, temperature)
-        self.client = Anthropic()
+    def api_model_name(self) -> str:
+        return f"anthropic/{super().api_model_name()}"
 
-    def _send(self, system: str, user: str, max_tokens: int = 3000) -> str:
-        """
-        Send a message to Claude
-        :param system: the context in which this message is to be taken
-        :param user: the prompt
-        :param max_tokens: max number of tokens to generate
-        :return: the response from the AI
-        """
-        response = self.client.messages.create(
-            model=self.api_model_name(),
-            max_tokens=max_tokens,
-            temperature=self.temperature,
-            system=system,
-            messages=[
-                {"role": "user", "content": user},
-            ],
-        )
-        return response.content[0].text
+    def _is_opus_4_7(self) -> bool:
+        return "opus-4-7" in self.api_model_name().lower()
 
-
-class GPT(LLM):
-    """
-    A class to act as an interface to the remote AI, in this case GPT
-    """
-
-    model_names = ["gpt-5", "gpt-5-mini", "gpt-5-nano"]
-
-    def __init__(self, model_name: str, temperature: float):
-        """
-        Create a new instance of the OpenAI client
-        """
-        super().__init__(model_name, temperature)
-        self.client = OpenAI()
-        if "gpt-5" in model_name:
-            self.reasoning_effort = "low"
-
-
-class O1(LLM):
-    """
-    A class to act as an interface to the remote AI, in this case O1
-    """
-
-    model_names = []
-
-    def __init__(self, model_name: str, temperature: float):
-        """
-        Create a new instance of the OpenAI client
-        """
-        super().__init__(model_name, temperature)
-        self.client = OpenAI()
-
-    def _send(self, system: str, user: str, max_tokens: int = 3000) -> str:
-        """
-        Send a message to O1
-        :param system: the context in which this message is to be taken
-        :param user: the prompt
-        :param max_tokens: max number of tokens to generate
-        :return: the response from the AI
-        """
-        message = system + "\n\n" + user
-        response = self.client.chat.completions.create(
-            model=self.api_model_name(),
-            messages=[
-                {"role": "user", "content": message},
-            ],
-        )
-        return response.choices[0].message.content
-
-
-class O3(LLM):
-    """
-    A class to act as an interface to the remote AI, in this case O3
-    """
-
-    model_names = []
-
-    def __init__(self, model_name: str, temperature: float):
-        """
-        Create a new instance of the OpenAI client
-        """
-        super().__init__(model_name, temperature)
-        override = os.getenv("OPENAI_API_KEY_O3")
-        if override:
-            print("Using special key with o3 access")
-            self.client = OpenAI(api_key=override)
-        else:
-            self.client = OpenAI()
-
-    def _send(self, system: str, user: str, max_tokens: int = 3000) -> str:
-        """
-        Send a message to O3
-        :param system: the context in which this message is to be taken
-        :param user: the prompt
-        :param max_tokens: max number of tokens to generate
-        :return: the response from the AI
-        """
-        message = system + "\n\n" + user
-        response = self.client.chat.completions.create(
-            model=self.api_model_name(),
-            messages=[
-                {"role": "user", "content": message},
-            ],
-        )
-        return response.choices[0].message.content
-
-
-class Gemini(LLM):
-    """
-    A class to act as an interface to the remote AI, in this case Gemini
-    """
-
-    model_names = [
-        "gemini-2.5-flash",
-        "gemini-2.5-flash-lite",
-        "gemini-2.5-pro",
-    ]
-
-    def __init__(self, model_name: str, temperature: float):
-        """
-        Create a new instance of the OpenAI client
-        """
-        super().__init__(model_name, temperature)
-        google_api_key = os.getenv("GOOGLE_API_KEY")
-        self.client = OpenAI(
-            api_key=google_api_key,
-            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-        )
-
-
-class Ollama(LLM):
-    """
-    A class to act as an interface to the remote AI, in this case Ollama via the OpenAI client
-    """
-
-    model_names = ["llama3.2 local", "gemma2 local", "qwen2.5 local", "phi4 local"]
-
-    def __init__(self, model_name: str, temperature: float):
-        """
-        Create a new instance of the OpenAI client for Ollama
-        """
-        super().__init__(model_name, temperature)
-        self.client = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
-
-    def _send(self, system: str, user: str, max_tokens: int = 3000) -> str:
-        """
-        Send a message to Ollama
-        :param system: the context in which this message is to be taken
-        :param user: the prompt
-        :param max_tokens: max number of tokens to generate
-        :return: the response from the AI
-        """
-
-        response = self.client.chat.completions.create(
+    def _send(self, system: str, user: str, schema_cls: Type[BaseModel]) -> BaseModel:
+        kwargs = dict(
             model=self.api_model_name(),
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            response_format={"type": "json_object"},
+            response_format=schema_cls,
+            max_tokens=ANTHROPIC_MAX_TOKENS,
+            stream=True,
         )
-        reply = response.choices[0].message.content
-        if "</think>" in reply:
-            logging.info("Thoughts:\n" + reply.split("</think>")[0].replace("<think>", ""))
-            reply = reply.split("</think>")[1]
-        return reply
+        if self._is_opus_4_7():
+            kwargs["thinking"] = {"type": "adaptive"}
+            kwargs["output_config"] = {"effort": "max"}
+        stream = litellm.completion(**kwargs)
+        rebuilt = litellm.stream_chunk_builder(list(stream))
+        return _parse_message(rebuilt.choices[0].message, schema_cls)
 
 
-class DeepSeekAPI(LLM):
+class OpenRouter(LLM):
     """
-    A class to act as an interface to the remote AI, in this case DeepSeek via the OpenAI client
-    """
+    Models accessed via OpenRouter. LiteLLM routes via the `openrouter/` prefix
+    and reads `OPENROUTER_API_KEY` from the environment. Non-streaming — OpenRouter
+    has no Anthropic-style high-max_tokens timeout.
 
-    model_names = ["deepseek-chat V3", "deepseek-reasoner R1"]
-
-    def __init__(self, model_name: str, temperature: float):
-        """
-        Create a new instance of the OpenAI client
-        """
-        super().__init__(model_name, temperature)
-        deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
-        self.client = OpenAI(api_key=deepseek_api_key, base_url="https://api.deepseek.com")
-
-
-class DeepSeekLocal(LLM):
-    """
-    A class to act as an interface to the remote AI, in this case Ollama via the OpenAI client
+    `reasoning={"effort": "high"}` is passed so reasoning models like kimi-k2.6
+    run at max effort, not OpenRouter's default. Valid OpenRouter effort levels
+    are "low", "medium", "high" — do not use "xhigh"/"max" (LiteLLM rejects).
     """
 
-    model_names = []
+    model_names = ["moonshotai/kimi-k2.6", "openai/gpt-oss-120b"]
 
-    def __init__(self, model_name: str, temperature: float):
-        """
-        Create a new instance of the OpenAI client
-        """
-        super().__init__(model_name, temperature)
-        self.client = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
+    def api_model_name(self) -> str:
+        return f"openrouter/{super().api_model_name()}"
 
-    def _send(self, system: str, user: str, max_tokens: int = 3000) -> str:
-        """
-        Send a message to Ollama
-        :param system: the context in which this message is to be taken
-        :param user: the prompt
-        :param max_tokens: max number of tokens to generate
-        :return: the response from the AI
-        """
-        system += "\nImportant: avoid overthinking. Think briefly and decisively. The final response must follow the given json format or you forfeit the game. Do not overthink. Respond with json."
-        user += "\nImportant: avoid overthinking. Think briefly and decisively. The final response must follow the given json format or you forfeit the game. Do not overthink. Respond with json."
-        response = self.client.chat.completions.create(
+    def _send(self, system: str, user: str, schema_cls: Type[BaseModel]) -> BaseModel:
+        response = litellm.completion(
             model=self.api_model_name(),
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
+            response_format=schema_cls,
+            reasoning={"effort": "high"},
         )
-        reply = response.choices[0].message.content
-        if "</think>" in reply:
-            logging.info("Thoughts:\n" + reply.split("</think>")[0].replace("<think>", ""))
-            reply = reply.split("</think>")[1]
-        return reply
+        return _parse_message(response.choices[0].message, schema_cls)
 
 
-class GroqAPI(LLM):
+def _parse_message(message, schema_cls: Type[BaseModel]) -> BaseModel:
     """
-    A class to act as an interface to the remote AI, in this case Groq
+    LiteLLM delivers structured outputs either as `message.content` (JSON text)
+    or as `message.tool_calls[0].function.arguments` when it uses tool-use under
+    the hood. Try content first, fall back to the tool call.
     """
-
-    model_names = [
-        "openai/gpt-oss-120b via Groq",
-    ]
-
-    def __init__(self, model_name: str, temperature: float):
-        """
-        Create a new instance of the Groq client
-        """
-        super().__init__(model_name, temperature)
-        self.client = Groq()
+    content = getattr(message, "content", None)
+    if content:
+        return schema_cls.model_validate_json(content)
+    tool_calls = getattr(message, "tool_calls", None) or []
+    if tool_calls:
+        return schema_cls.model_validate_json(tool_calls[0].function.arguments)
+    raise LLMException("Response had neither content nor tool_calls")
