@@ -55,31 +55,64 @@ def record_game(result: Result) -> bool:
         return False
 
 
-def get_games() -> List[Result]:
-    """
-    Return all games in the order that they were played.
-    Returns empty list if database is unavailable.
-    """
+def _fetch_games(query: dict, sort_direction: int = 1, limit: int | None = None) -> List[Result]:
+    """Run the given Mongo query and return Results in insertion order."""
     collection = _get_collection()
     if collection is None:
         return []
-
     try:
-        # Sort by _id to maintain insertion order
-        games = collection.find().sort("_id", 1)
-
-        # Convert MongoDB documents back to Result objects
+        cursor = collection.find(query).sort("_id", sort_direction)
+        if limit is not None:
+            cursor = cursor.limit(limit)
         results = []
-        for game in games:
-            # Remove MongoDB's _id field
+        for game in cursor:
             game.pop("_id", None)
             results.append(Result(**game))
-
         return results
     except Exception as e:
         logging.error("Error getting games")
         logging.exception(e)
         return []
+
+
+def get_games(limit: int = 20) -> List[Result]:
+    """
+    Return the most recent `limit` games in chronological order (oldest of
+    the window first) — for the game-history table. Separate from ELO, which
+    uses `get_supported_games` over the full history.
+    """
+    results = _fetch_games({}, sort_direction=-1, limit=limit)
+    results.reverse()
+    return results
+
+
+def count_games() -> int:
+    """Total number of games in the DB. Uses Mongo's count_documents so we
+    don't have to pull or deserialize the rows."""
+    collection = _get_collection()
+    if collection is None:
+        return 0
+    try:
+        return collection.count_documents({})
+    except Exception as e:
+        logging.error("Error counting games")
+        logging.exception(e)
+        return 0
+
+
+def get_supported_games(supported_models: List[str]) -> List[Result]:
+    """
+    Return only games where BOTH players are in `supported_models`. Used for
+    the leaderboard's ELO calculation, so we don't pull or recompute over
+    games involving retired models. The filter is pushed into the Mongo query
+    so the DB does the work rather than Python.
+    """
+    if not supported_models:
+        return []
+    return _fetch_games({
+        "red_player": {"$in": supported_models},
+        "yellow_player": {"$in": supported_models},
+    })
 
 
 class EloCalculator:
@@ -170,9 +203,11 @@ def calculate_elo_ratings(
     return calculator.ratings
 
 
-def ratings() -> Dict[str, float]:
+def ratings(supported_models: List[str]) -> Dict[str, float]:
     """
-    Return the ELO ratings from all prior games in the DB
+    Return ELO ratings computed from the subset of games where both players
+    are in `supported_models`. Filtering at the DB layer keeps the ratings
+    tab responsive as the full game history grows.
     """
-    games = get_games()
+    games = get_supported_games(supported_models)
     return calculate_elo_ratings(games)

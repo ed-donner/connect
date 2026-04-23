@@ -15,41 +15,38 @@ footer{display:none !important}
 
 js = """
 function refresh() {
+    // Gradio 5.x auto-calls this named function on mount. Everything must live
+    // inside here — trailing top-level statements cause Blocks.svelte's
+    // `new AsyncFunction(...)` wrapper to throw a SyntaxError.
     const url = new URL(window.location);
     if (url.searchParams.get('__theme') !== 'dark') {
         url.searchParams.set('__theme', 'dark');
         window.location.href = url.href;
         return;
     }
+    if (window.__c4Ready) return;
+    window.__c4Ready = true;
 
-    // --- Drop sound + animation ---------------------------------------------
-    // Triggered from board_view.py via an invisible <img onload="window.onDrop()">
-    // injected into the board HTML on every render where a new piece exists.
-    // We deliberately drive both the drop animation and the clack from JS so
-    // the behaviour doesn't depend on Svelte/Gradio element-diffing.
-
+    // Audio for the drop clack.
     let audioCtx = null;
     function ensureCtx() {
         if (!audioCtx) {
-            try {
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            } catch (e) { return null; }
+            try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+            catch (e) { return null; }
         }
         if (audioCtx.state === 'suspended') audioCtx.resume();
         return audioCtx;
     }
+    window.addEventListener('click', ensureCtx);
 
     function playClack() {
         const ctx = ensureCtx();
         if (!ctx) return;
         const t0 = ctx.currentTime;
-
-        // Sharp attack: short filtered-noise transient.
         const noiseBuf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 0.008), ctx.sampleRate);
         const nd = noiseBuf.getChannelData(0);
         for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
-        const nSrc = ctx.createBufferSource();
-        nSrc.buffer = noiseBuf;
+        const nSrc = ctx.createBufferSource(); nSrc.buffer = noiseBuf;
         const nFilt = ctx.createBiquadFilter();
         nFilt.type = 'bandpass'; nFilt.frequency.value = 2500; nFilt.Q.value = 1.2;
         const nGain = ctx.createGain();
@@ -57,41 +54,25 @@ function refresh() {
         nGain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.02);
         nSrc.connect(nFilt); nFilt.connect(nGain); nGain.connect(ctx.destination);
         nSrc.start(t0);
-
-        // Bright plastic ring: two sines in the upper mids, fast decay.
-        [{f: 1600, g: 0.22}, {f: 2200, g: 0.14}].forEach(({f, g}) => {
-            const osc = ctx.createOscillator();
-            const og = ctx.createGain();
+        [{f:1600,g:0.22},{f:2200,g:0.14}].forEach(({f,g}) => {
+            const osc = ctx.createOscillator(); const og = ctx.createGain();
             osc.type = 'sine'; osc.frequency.value = f;
             og.gain.setValueAtTime(g, t0);
             og.gain.exponentialRampToValueAtTime(0.001, t0 + 0.16);
             osc.connect(og); og.connect(ctx.destination);
-            osc.start(t0);
-            osc.stop(t0 + 0.18);
+            osc.start(t0); osc.stop(t0 + 0.18);
         });
     }
-
-    // Pre-prime the AudioContext on the user's first click so later autoplay
-    // works without further gesture.
-    window.addEventListener('click', ensureCtx);
-
     window.onDrop = function () {
         const pieces = document.querySelectorAll('.new-piece');
         if (!pieces.length) return;
         let played = false;
         pieces.forEach(p => {
-            // Web Animations API: fresh animation on every call, independent
-            // of whether the DOM element was re-mounted or just re-rendered.
-            const anim = p.animate(
-                [
-                    { transform: 'translateY(-300px)' },
-                    { transform: 'translateY(0)' }
-                ],
+            const a = p.animate(
+                [{transform:'translateY(-300px)'},{transform:'translateY(0)'}],
                 { duration: 500, easing: 'cubic-bezier(0.95, 0.05, 1, 0.5)', fill: 'forwards' }
             );
-            anim.onfinish = () => {
-                if (!played) { played = true; playClack(); }
-            };
+            a.onfinish = () => { if (!played) { played = true; playClack(); } };
         });
     };
 }
@@ -109,7 +90,7 @@ def message_html(game) -> str:
 
 def format_records_for_table(games):
     """
-    Turn the results objects into a pandas DataFrame for the Gradio Dataframe
+    Turn the results objects into a pandas DataFrame for the Gradio Dataframe.
     """
     df = pd.DataFrame(
         [
@@ -123,10 +104,7 @@ def format_records_for_table(games):
         ],
         columns=["When", "Red Player", "Yellow Player", "Winner"],
     )
-
-    # Remove microseconds while preserving datetime format
     df["When"] = pd.to_datetime(df["When"]).dt.floor("s")
-
     return df
 
 
@@ -161,9 +139,13 @@ def leaderboard_callback(game):
     """
     Callback called when the user switches to the Leaderboard tab. Load in the results.
     """
-    records_df = format_records_for_table(Game.get_games())
+    recent = Game.get_games(limit=20)
     ratings_df = format_ratings_for_table(Game.get_ratings())
-    return records_df, ratings_df
+    records_update = gr.Dataframe(
+        value=format_records_for_table(recent),
+        label=f"Most recent {len(recent)} games out of {Game.count_games():,} games played",
+    )
+    return records_update, ratings_df
 
 
 def move_callback(game):
@@ -327,7 +309,7 @@ def make_display():
                     with gr.Column(scale=2):
                         results_df = gr.Dataframe(
                             headers=["When", "Red Player", "Yellow Player", "Winner"],
-                            label="Game History",
+                            label="Recent games",
                             column_widths=[2, 2, 2, 1],
                             wrap=True,
                             col_count=4,

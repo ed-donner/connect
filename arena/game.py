@@ -1,6 +1,6 @@
 from arena.board import Board, RED, YELLOW
 from arena.player import Player
-from arena.record import get_games, Result, record_game, ratings
+from arena.record import get_games, count_games, Result, record_game, ratings
 from datetime import datetime
 from typing import List
 from arena.llm import LLM
@@ -46,22 +46,26 @@ class Game:
         return self.players[player].thoughts()
 
     @staticmethod
-    def get_games() -> List:
+    def get_games(limit: int = 20) -> List:
         """
-        Return all the games stored in the db
+        The most recent `limit` games (default 20). Used for the game-history
+        table — does not affect ELO, which fetches its own subset.
         """
-        return get_games()
+        return get_games(limit)
+
+    @staticmethod
+    def count_games() -> int:
+        """Total number of games in the DB (unfiltered, all models)."""
+        return count_games()
 
     @staticmethod
     def get_ratings():
         """
-        Return the ELO ratings of all players - filter out any models that are not supported
+        ELO ratings restricted to games where both players are in the current
+        supported-model list. The filter is applied at the DB query layer (see
+        record.get_supported_games), so this doesn't scan the whole history.
         """
-        return {
-            model: rating
-            for model, rating in ratings().items()
-            if model in LLM.all_supported_model_names()
-        }
+        return ratings(LLM.all_supported_model_names())
 
     def record(self):
         """

@@ -2,7 +2,7 @@ python-dotenv
 jupyterlab
 ipywidgets
 urllib3
-gradio
+gradio==5.15.0
 litellm
 pydantic
 black

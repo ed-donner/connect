@@ -1,12 +1,14 @@
 """
 LLM layer for the Connect 4 arena, built on LiteLLM.
 
-Single code path for OpenAI, Anthropic, and OpenRouter. Structured outputs via
-a Pydantic schema passed through `response_format`; LiteLLM implements this as
-tool-use under the hood for providers that lack native JSON-schema support.
-Anthropic calls stream (to dodge the 10-min non-streaming timeout at high
-max_tokens) and carry `thinking` + `output_config` so Opus 4.7 runs at full
-reasoning strength.
+Single code path for OpenAI, Anthropic, Google (Gemini), xAI (Grok), and
+OpenRouter. Structured outputs via a Pydantic schema passed through
+`response_format`; LiteLLM implements this as tool-use under the hood for
+providers that lack native JSON-schema support. Anthropic calls stream (to
+dodge the 10-min non-streaming timeout at high max_tokens) and carry
+`thinking` + `output_config` so Opus 4.7 runs at full reasoning strength.
+Gemini and Grok use LiteLLM's unified `reasoning_effort="high"` knob so they
+also play at maximum reasoning.
 """
 
 from abc import ABC
@@ -118,7 +120,7 @@ class LLM(ABC):
 class GPT(LLM):
     """OpenAI models. Inherits the default `_send`."""
 
-    model_names = ["gpt-5.4", "gpt-5", "gpt-5.4-mini", "gpt-5.4-nano"]
+    model_names = ["gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"]
 
 
 class Claude(LLM):
@@ -134,8 +136,7 @@ class Claude(LLM):
 
     model_names = [
         "claude-opus-4-7",
-        "claude-opus-4-1-20250805",
-        "claude-sonnet-4-5",
+        "claude-sonnet-4-6",
         "claude-haiku-4-5",
     ]
 
@@ -173,9 +174,17 @@ class OpenRouter(LLM):
     `reasoning={"effort": "high"}` is passed so reasoning models like kimi-k2.6
     run at max effort, not OpenRouter's default. Valid OpenRouter effort levels
     are "low", "medium", "high" — do not use "xhigh"/"max" (LiteLLM rejects).
+    Note: OpenRouter takes `reasoning={...}`, not LiteLLM's unified
+    `reasoning_effort=` param (which OpenRouter explicitly rejects).
     """
 
-    model_names = ["moonshotai/kimi-k2.6", "openai/gpt-oss-120b"]
+    model_names = [
+        "moonshotai/kimi-k2.6",
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-20b",
+        "z-ai/glm-5.1",
+        "nvidia/nemotron-3-super-120b-a12b",
+    ]
 
     def api_model_name(self) -> str:
         return f"openrouter/{super().api_model_name()}"
@@ -191,6 +200,62 @@ class OpenRouter(LLM):
             reasoning={"effort": "high"},
         )
         return _parse_message(response.choices[0].message, schema_cls)
+
+
+class Gemini(LLM):
+    """
+    Google Gemini models via LiteLLM. Reads `GEMINI_API_KEY` from environment.
+    Pro/Flash variants use LiteLLM's `reasoning_effort` (mapped to Gemini 3+'s
+    thinking_level) so they reason at full strength. Flash-Lite variants are
+    non-reasoning by design — LiteLLM rejects `reasoning_effort` for them — so
+    we skip the param for any model whose name contains "lite".
+    Temperature is left at the Gemini default (1.0); values < 1.0 can cause
+    infinite loops on Gemini 3 per the LiteLLM provider docs.
+    """
+
+    model_names = [
+        "gemini-3.1-pro-preview",
+        "gemini-3-flash-preview",
+        "gemini-3.1-flash-lite-preview",
+    ]
+
+    def api_model_name(self) -> str:
+        return f"gemini/{super().api_model_name()}"
+
+    def _supports_reasoning(self) -> bool:
+        return "lite" not in self.model_name.lower()
+
+    def _send(self, system: str, user: str, schema_cls: Type[BaseModel]) -> BaseModel:
+        kwargs = dict(
+            model=self.api_model_name(),
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            response_format=schema_cls,
+        )
+        if self._supports_reasoning():
+            kwargs["reasoning_effort"] = "high"
+        response = litellm.completion(**kwargs)
+        return _parse_message(response.choices[0].message, schema_cls)
+
+
+class Grok(LLM):
+    """
+    xAI Grok models via LiteLLM. Reads `XAI_API_KEY` from environment.
+    Inherits the default OpenAI-style `_send` — no `reasoning_effort` because
+    Grok 4.20 rejects it on every variant (including the *-reasoning one):
+    xAI returns "Model ... does not support parameter reasoningEffort." The
+    -reasoning variant reasons at its built-in level; -non-reasoning doesn't.
+    """
+
+    model_names = [
+        "grok-4.20-0309-reasoning",
+        "grok-4.20-0309-non-reasoning",
+    ]
+
+    def api_model_name(self) -> str:
+        return f"xai/{super().api_model_name()}"
 
 
 def _parse_message(message, schema_cls: Type[BaseModel]) -> BaseModel:
