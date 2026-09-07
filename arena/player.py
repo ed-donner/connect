@@ -26,7 +26,12 @@ class Player:
 Players take turns to drop counters into one of 7 columns A, B, C, D, E, F, G.
 The winner is the first player to get 4 counters in a row in any direction (horizontal, vertical, or diagonal).
 You are {pieces[self.color]} and your opponent is {pieces[self.color * -1]}.
-Think carefully about threats, opportunities, and strategy before choosing your move."""
+
+Look first for a move that wins immediately, then for one that blocks an opponent's win next move; avoid any move that hands your opponent an immediate winning reply.
+Beyond those, prefer moves that create double threats — two winning paths the opponent cannot block in a single turn.
+Otherwise build central control and develop connections. When the right move is evident, commit; the strongest play is often the obvious one.
+Avoid over-thinking. Do not reconsider moves multiple times. After considering opportunities, threats, and the overall position, pick your best move and stick to it.
+"""
 
     def user(self, board) -> str:
         return f"""It is your turn to make a move as {pieces[self.color]}.

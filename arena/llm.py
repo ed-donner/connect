@@ -5,8 +5,9 @@ Single code path for OpenAI, Anthropic, Google (Gemini), xAI (Grok), and
 OpenRouter. Structured outputs via a Pydantic schema passed through
 `response_format`; LiteLLM implements this as tool-use under the hood for
 providers that lack native JSON-schema support. Anthropic calls stream (to
-dodge the 10-min non-streaming timeout at high max_tokens) and carry
-`thinking` + `output_config` so Opus 4.7 runs at full reasoning strength.
+dodge the 10-min non-streaming timeout at high max_tokens); Opus 4.7 carries
+`thinking` + `output_config` and Fable 5 carries `output_format` +
+`output_config` so both run at full reasoning strength (see Claude docstring).
 Gemini and Grok use LiteLLM's unified `reasoning_effort="high"` knob so they
 also play at maximum reasoning.
 """
@@ -20,6 +21,7 @@ from typing import Dict, List, Self, Type
 import litellm
 from dotenv import load_dotenv
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.utils import type_to_response_format_param
 from pydantic import BaseModel
 
 load_dotenv(override=True)
@@ -40,7 +42,8 @@ AnthropicConfig._apply_output_config = _apply_output_config
 
 logger = logging.getLogger(__name__)
 
-ANTHROPIC_MAX_TOKENS = 64_000
+ANTHROPIC_MAX_TOKENS = 128_000
+HAIKU_MAX_TOKENS = 64_000  # Haiku 4.5's output ceiling; the API rejects anything higher
 RETRIES = 3
 RETRY_DELAY_SECONDS = 2
 
@@ -118,23 +121,49 @@ class LLM(ABC):
 
 
 class GPT(LLM):
-    """OpenAI models. Inherits the default `_send`."""
+    """
+    OpenAI gpt-5.x models. Sends `reasoning_effort="xhigh"` so models reason
+    at maximum strength rather than OpenAI's default level. The base `_send`
+    doesn't pass reasoning controls, so we override here.
+    """
 
-    model_names = ["gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"]
+    model_names = ["gpt-5.6-sol", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"]
+
+    def _send(self, system: str, user: str, schema_cls: Type[BaseModel]) -> BaseModel:
+        response = litellm.completion(
+            model=self.api_model_name(),
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            response_format=schema_cls,
+            reasoning_effort="xhigh",
+        )
+        return _parse_message(response.choices[0].message, schema_cls)
 
 
 class Claude(LLM):
     """
     Anthropic models. Streams the response so we can set max_tokens high without
-    hitting the 10-min non-streaming timeout. For Opus 4.7 we additionally enable
-    adaptive thinking and `output_config={"effort": "max"}` so Opus runs at full
-    reasoning strength. Older Claude models (Sonnet 4.5, Haiku 4.5, Opus 4.1)
-    reject thinking when combined with tool_choice-forced structured outputs —
-    LiteLLM implements `response_format` via forced tool use — so we skip those
-    kwargs for them.
+    hitting the 10-min non-streaming timeout. Reasoning is controlled per model:
+
+    - Fable 5: thinking is always on and cannot be configured; effort is set via
+      `output_config={"effort": "xhigh"}`. LiteLLM's `reasoning_effort` param is
+      unusable here (its Anthropic mapping only knows models up to Opus 4.7), and
+      its `response_format` mapping falls back to forced tool use for models not
+      in its hardcoded allowlist — which Anthropic rejects when thinking is on.
+      So we bypass both: we build the native `output_format` json_schema payload
+      with LiteLLM's own mapper and pass it through directly (verified on the
+      wire: no tools/tool_choice, structured-outputs beta header auto-added).
+    - Opus 4.7: adaptive thinking + `output_config={"effort": "xhigh"}`. Its
+      `response_format` takes LiteLLM's native output_format path already.
+    - Sonnet 4.6, Haiku 4.5: no reasoning kwargs. LiteLLM implements their
+      `response_format` via forced tool use, and Anthropic rejects thinking
+      combined with forced tool_choice.
     """
 
     model_names = [
+        "claude-fable-5",
         "claude-opus-4-7",
         "claude-sonnet-4-6",
         "claude-haiku-4-5",
@@ -143,8 +172,14 @@ class Claude(LLM):
     def api_model_name(self) -> str:
         return f"anthropic/{super().api_model_name()}"
 
+    def _is_fable(self) -> bool:
+        return "fable" in self.api_model_name().lower()
+
     def _is_opus_4_7(self) -> bool:
         return "opus-4-7" in self.api_model_name().lower()
+
+    def _max_tokens(self) -> int:
+        return HAIKU_MAX_TOKENS if "haiku" in self.api_model_name().lower() else ANTHROPIC_MAX_TOKENS
 
     def _send(self, system: str, user: str, schema_cls: Type[BaseModel]) -> BaseModel:
         kwargs = dict(
@@ -153,13 +188,20 @@ class Claude(LLM):
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            response_format=schema_cls,
-            max_tokens=ANTHROPIC_MAX_TOKENS,
+            max_tokens=self._max_tokens(),
             stream=True,
         )
-        if self._is_opus_4_7():
-            kwargs["thinking"] = {"type": "adaptive"}
-            kwargs["output_config"] = {"effort": "max"}
+        if self._is_fable():
+            response_format = type_to_response_format_param(response_format=schema_cls)
+            kwargs["output_format"] = AnthropicConfig().map_response_format_to_anthropic_output_format(
+                response_format
+            )
+            kwargs["output_config"] = {"effort": "xhigh"}
+        else:
+            kwargs["response_format"] = schema_cls
+            if self._is_opus_4_7():
+                kwargs["thinking"] = {"type": "adaptive"}
+                kwargs["output_config"] = {"effort": "xhigh"}
         stream = litellm.completion(**kwargs)
         rebuilt = litellm.stream_chunk_builder(list(stream))
         return _parse_message(rebuilt.choices[0].message, schema_cls)
