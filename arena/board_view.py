@@ -49,9 +49,9 @@ def to_svg(board):
     passes through the four winning cells.
 
     A dropped piece is animated + sounds a clack at landing via a small trigger
-    mechanism: a 1x1 invisible <img onload="window.onDrop()"> that fires once
-    per render. `window.onDrop` is defined in c4.py's global JS and uses the
-    Web Animations API (reliable) plus a Web Audio clack (no autoplay issues).
+    mechanism: a 1x1 invisible <img> whose onload attribute carries
+    _DROP_TRIGGER_JS (top of this file), so it fires once per render. It uses
+    the Web Animations API (reliable) plus a Web Audio clack (no autoplay issues).
     """
     svg = '''
     <div style="display: flex; justify-content: center;">

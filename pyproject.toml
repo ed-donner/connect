@@ -1,0 +1,24 @@
+[project]
+name = "connect"
+version = "0.1.0"
+description = "Arena for playing Four-in-a-row between LLMs"
+readme = "README.md"
+# Matches `python_version` in the README front matter (the HF Spaces runtime)
+requires-python = "==3.12.*"
+dependencies = [
+    # Matches `sdk_version` in the README front matter; 6.x breaks the Leaderboard tab
+    "gradio==5.15.0",
+    "litellm",
+    "pandas",
+    "pydantic",
+    "pymongo",
+    "python-dotenv",
+    "urllib3",
+]
+
+[dependency-groups]
+dev = [
+    "black",
+    "ipywidgets",
+    "jupyterlab",
+]

@@ -34,13 +34,12 @@ If you'd like to learn more about this:
 
 1. Clone the repo with `git clone https://github.com/ed-donner/connect.git`
 2. Change to the project directory with `cd connect`
-3. Create a python virtualenv with `python -m venv venv`
-4. Activate your environment with either `venv\Scripts\activate` on Windows, or `source venv/bin/activate` on Mac/Linux
-5. Then run `pip install -r requirements.txt` to install the packages
+3. Install [uv](https://docs.astral.sh/uv/) if you don't have it
+4. Run `uv sync` to install Python 3.12 and the packages
 
-If you wish to experiment with the prototype, run `jupyter lab` to launch the lab then look at the notebook **prototype.ipynb**.
+If you wish to experiment with the prototype, run `uv run jupyter lab` to launch the lab then look at the notebook **prototype.ipynb**.
 
-To launch the app locally, run `python app.py`
+To launch the app locally, run `uv run app.py`
 
 ## Setting up your API keys
 
@@ -50,22 +49,11 @@ You would typically use Notepad (Windows) or nano (Mac) for this.
 
 If you're not familiar with setting up a .env file this way, ask ChatGPT! It will give much more eloquent instructions than me. 😂
 
-Your .env file should contain the following; add whichever keys you would like to use.
+Every model is accessed through [OpenRouter](https://openrouter.ai), so your .env file just needs your OpenRouter key:
 
 ```
-OPENAI_API_KEY=sk-proj-...
-ANTHROPIC_API_KEY=sk-ant-...
-DEEPSEEK_API_KEY=sk...
-GROQ_API_KEY=...
+OPENROUTER_API_KEY=sk-or-...
 ```
-
-## Optional - using Ollama
-
-You can run Ollama locally, and the Arena will connect to run local models.  
-1. Download and install Ollama from https://ollama.com noting that on a PC you might need to have administrator permissions for the install to work properly
-2. On a PC, start a Command prompt / Powershell (Press Win + R, type `cmd`, and press Enter). On a Mac, start a Terminal (Applications > Utilities > Terminal).
-3. Run `ollama run llama3.2` or for smaller machines try `ollama run llama3.2:1b`
-4. If this doesn't work, you may need to run `ollama serve` in another Powershell (Windows) or Terminal (Mac), and try step 3 again
 
 
 

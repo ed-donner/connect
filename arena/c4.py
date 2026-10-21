@@ -22,59 +22,7 @@ function refresh() {
     if (url.searchParams.get('__theme') !== 'dark') {
         url.searchParams.set('__theme', 'dark');
         window.location.href = url.href;
-        return;
     }
-    if (window.__c4Ready) return;
-    window.__c4Ready = true;
-
-    // Audio for the drop clack.
-    let audioCtx = null;
-    function ensureCtx() {
-        if (!audioCtx) {
-            try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
-            catch (e) { return null; }
-        }
-        if (audioCtx.state === 'suspended') audioCtx.resume();
-        return audioCtx;
-    }
-    window.addEventListener('click', ensureCtx);
-
-    function playClack() {
-        const ctx = ensureCtx();
-        if (!ctx) return;
-        const t0 = ctx.currentTime;
-        const noiseBuf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 0.008), ctx.sampleRate);
-        const nd = noiseBuf.getChannelData(0);
-        for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
-        const nSrc = ctx.createBufferSource(); nSrc.buffer = noiseBuf;
-        const nFilt = ctx.createBiquadFilter();
-        nFilt.type = 'bandpass'; nFilt.frequency.value = 2500; nFilt.Q.value = 1.2;
-        const nGain = ctx.createGain();
-        nGain.gain.setValueAtTime(0.6, t0);
-        nGain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.02);
-        nSrc.connect(nFilt); nFilt.connect(nGain); nGain.connect(ctx.destination);
-        nSrc.start(t0);
-        [{f:1600,g:0.22},{f:2200,g:0.14}].forEach(({f,g}) => {
-            const osc = ctx.createOscillator(); const og = ctx.createGain();
-            osc.type = 'sine'; osc.frequency.value = f;
-            og.gain.setValueAtTime(g, t0);
-            og.gain.exponentialRampToValueAtTime(0.001, t0 + 0.16);
-            osc.connect(og); og.connect(ctx.destination);
-            osc.start(t0); osc.stop(t0 + 0.18);
-        });
-    }
-    window.onDrop = function () {
-        const pieces = document.querySelectorAll('.new-piece');
-        if (!pieces.length) return;
-        let played = false;
-        pieces.forEach(p => {
-            const a = p.animate(
-                [{transform:'translateY(-300px)'},{transform:'translateY(0)'}],
-                { duration: 500, easing: 'cubic-bezier(0.95, 0.05, 1, 0.5)', fill: 'forwards' }
-            );
-            a.onfinish = () => { if (!played) { played = true; playClack(); } };
-        });
-    };
 }
 """
 

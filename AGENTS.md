@@ -4,52 +4,60 @@ This file provides guidance to Coding Agents when working with code in this repo
 
 ## Commands
 
-- Run the Gradio app locally: `python app.py` (entry point loads `.env`, builds the UI from `arena/c4.py`).
-- Install deps: `pip install -r requirements.txt` (HuggingFace Spaces target; no `uv` / `pyproject.toml` here).
-- No test suite or lint config is wired up. `black` is listed in requirements for manual formatting.
+- Install deps: `uv sync` (creates `.venv` from `uv.lock`, including the `dev` group: `black`, `jupyterlab`, `ipywidgets`).
+- Run the Gradio app locally: `uv run app.py` (entry point loads `.env`, builds the UI from `arena/c4.py`).
+- No test suite or lint config is wired up. Format manually with `uv run black`.
 - `prototype.ipynb` is an exploratory notebook kept alongside the app; it is not part of the runtime path.
+- Two git remotes: `origin` (GitHub, `ed-donner/connect`) and `hf` (the HuggingFace Space, `ed-donner/connect`). Pushing to `hf` deploys the Space.
+
+### Local env mirrors the Space
+
+- `pyproject.toml` is the source of truth for dependencies. `requires-python = "==3.12.*"` (plus `.python-version`) matches `python_version` in the README front matter.
+- HF Spaces only reads `requirements.txt`, so it is **generated** from `uv.lock` with exact pins, runtime deps only. Never hand-edit it; after any dependency change run:
+  `uv export --no-dev --no-hashes --no-emit-project --no-annotate --output-file requirements.txt`
+- The Space build also installs `gradio[oauth]==<sdk_version>`, `spaces` and `uvicorn` itself. Checked with `uv pip compile` that these resolve against the pins without changing any pinned version.
 
 ### Gradio version (pinned — do not "upgrade")
 
-`requirements.txt` pins `gradio==5.15.0` deliberately, matching `sdk_version` in `README.md` (HF Spaces uses that value at deploy time). Gradio **6.x regresses the Leaderboard**: switching to the tab freezes the browser's main thread indefinitely after the SSE payload arrives — the `js=` parameter on `Blocks` also stops auto-calling the named function there. Pinning is the fix; do not bump it without a matching HF `sdk_version` bump *and* a live re-test of the Leaderboard tab.
+`pyproject.toml` (and so `requirements.txt`) pins `gradio==5.15.0` deliberately, matching `sdk_version` in `README.md` (HF Spaces uses that value at deploy time). Gradio **6.x regresses the Leaderboard**: switching to the tab freezes the browser's main thread indefinitely after the SSE payload arrives — the `js=` parameter on `Blocks` also stops auto-calling the named function there. Pinning is the fix; do not bump it without a matching HF `sdk_version` bump *and* a live re-test of the Leaderboard tab.
 
 ## Required env (.env at project root)
 
-- Provider keys: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`. Only the keys corresponding to enabled models need to be present.
-- `MONGO_URI` — optional. Without it, `arena/record.py` silently returns no history and does not persist games (the Leaderboard tab just shows empty tables). The DB name is `outsmart`, collection `connect`.
-- `MODELS` — optional comma-separated allowlist. `LLM.all_model_names()` intersects this with the registered models to populate the dropdowns; useful for Spaces deployments that should expose a subset.
+- `OPENROUTER_API_KEY` — the only provider key; every model goes through OpenRouter.
+- `MONGO_URI` — optional. Without it, `arena/record.py` silently returns no history and does not persist games (the Leaderboard tab just shows empty tables). The DB name is `outsmart`, collection `connect`. Local runs and the Space share this DB, so a locally completed "Run game" lands on the live leaderboard ("Next move" does not record).
+- `MODELS` — optional comma-separated allowlist. `LLM.all_model_names()` intersects this with the registered models to populate the dropdowns. The HF Space has set it in the past (in Space settings, not the repo) to expose only cheap models. Gotchas:
+  - Entries are not whitespace-trimmed, so `a, b` silently drops `b`. Names must match `model_names` exactly, e.g. `openai/gpt-6-luna` (no `openrouter/` prefix).
+  - Order sets the dropdown order; the first two entries are the default Red and Yellow players. Without `MODELS`, the defaults are the first two entries of `OpenRouter.model_names`.
+  - At least two entries must survive the filter, or `c4.py` hits an IndexError on `ALL_MODEL_NAMES[1]` at startup. Renaming or replacing models can trigger this on the Space if its `MODELS` still lists old names.
+  - Read once at import time, so changing it needs a restart. It does not filter the Leaderboard, which uses `all_supported_model_names()`.
 
 ## Architecture
 
 Single-process Gradio app where two LLMs play Connect 4 against each other. The layering is deliberate:
 
-- `app.py` → `arena/c4.py::make_display` builds the Gradio `Blocks` and wires callbacks. All UI state is held in a single `gr.State` containing a `Game`.
+- `app.py` → `arena/c4.py::make_display` builds the Gradio `Blocks` and wires callbacks. All UI state is held in a single `gr.State` containing a `Game`. The `js=` function on `Blocks` only forces the dark theme.
 - `arena/game.py::Game` owns a `Board` and two `Player`s keyed by color constant (`RED=1`, `YELLOW=-1`, see `arena/board.py`). `Game.record()` writes results via `arena/record.py`.
-- `arena/board.py::Board` is pure game logic plus multiple render formats (`__repr__`, `html`, `svg` via `board_view.py`, `display`, `next_drops`). `display()` is a labelled ASCII grid with row numbers and an explicit "bottom (pieces stack upward)" marker; `next_drops()` is a single line listing which row each legal column's next piece lands on. These two are what's sent to the LLM — the older `json()`/`alternative()` dual representation was removed once per-token cost and diagonal blindness on small models drove a redesign.
+- `arena/board.py::Board` is pure game logic plus multiple render formats (`__repr__`, `html`, `svg` via `board_view.py`, `display`, `next_drops`). `display()` is a labelled ASCII grid with row numbers and an explicit "bottom (pieces stack upward)" marker; `next_drops()` is a single line listing which row each legal column's next piece lands on. These two are what's sent to the LLM — the older `json()`/`alternative()` dual representation was removed once per-token cost and diagonal blindness on small models drove a redesign. The drop animation and clack sound are inlined into an `<img onload>` attribute (`_DROP_TRIGGER_JS` in `board_view.py`), so they don't depend on Gradio's `js=` parameter.
 - `arena/player.py::Player` owns the prompt templates. Builds a dynamic Pydantic `MoveSchema` per turn (`move_column: Literal[*legal_moves]`) so the structured output layer makes illegal columns unrepresentable. `process_move` receives a parsed schema instance; the only forfeit path is an exhausted-retry API failure.
-- `arena/llm.py::LLM` wraps **LiteLLM** (`litellm.completion`). One code path for OpenAI, Anthropic, Gemini, xAI (Grok), and OpenRouter, selected by the model-name prefix each subclass attaches (`anthropic/claude-...`, `gemini/gemini-...`, `xai/grok-...`, `openrouter/moonshotai/...`, or plain `gpt-...`). Returns parsed Pydantic instances.
+- `arena/llm.py::LLM` wraps **LiteLLM** (`litellm.completion`). All models are on the `OpenRouter` subclass, which adds the `openrouter/` prefix. Returns parsed Pydantic instances.
 
-### LLM layer (LiteLLM)
+### LLM layer (LiteLLM via OpenRouter)
 
-- `send(system, user, schema_cls) -> BaseModel | None` is the single entry point. Internally calls `litellm.completion(..., response_format=schema_cls)` and retries up to 3 times; returns `None` only when retries are exhausted (the forfeit signal). The old JSON-substring extraction hack is gone — structured outputs either return valid JSON or raise.
-- **OpenAI path** (`LLM._send`, inherited by `GPT`): non-streaming, no `max_tokens`, just `response_format=schema_cls`.
-- **OpenRouter path** (`OpenRouter._send`): same as OpenAI shape plus `reasoning={"effort": "high"}` so reasoning models like `moonshotai/kimi-k2.6` run at max effort, not OpenRouter's default. Verified on the wire. Valid OpenRouter effort levels are `"low"`, `"medium"`, `"high"` — LiteLLM's param validator rejects `"xhigh"`/`"max"`, so do not reintroduce those. OpenRouter also rejects LiteLLM's unified `reasoning_effort=` param, which is why we use the `reasoning={...}` dict form instead. OpenRouter has no Anthropic-style timeout, so streaming is unnecessary even though some calls can take a couple of minutes.
-- **Gemini path** (`Gemini._send`): uses LiteLLM's unified `reasoning_effort="high"` (which maps to Gemini 3+'s `thinking_level`), but *only* for non-Lite variants. Flash-Lite variants are non-reasoning by design and LiteLLM raises `UnsupportedParamsError` if `reasoning_effort` is passed — the class skips the kwarg when `"lite"` is in the model name. Temperature is left at Gemini's default (1.0); values < 1.0 can cause infinite loops per LiteLLM provider docs.
-- **xAI Grok path** (`Grok._send`): inherits the default OpenAI-style `_send` with *no* reasoning param. Grok 4.20 rejects `reasoningEffort` on every variant including the `-reasoning` one (xAI's error message: "Model ... does not support parameter reasoningEffort."). The `-reasoning` variant reasons at its built-in level; the `-non-reasoning` variant doesn't.
-- **Anthropic path** (`Claude._send`): always streams with `max_tokens=64_000` to avoid Anthropic's 10-min non-streaming timeout at high token ceilings. Chunks are rebuilt via `litellm.stream_chunk_builder`, then parsed by `_parse_message`, which handles both delivery shapes LiteLLM may use (`message.content` JSON or `message.tool_calls[0].function.arguments`).
-- **Opus-4.7-only kwargs** (`Claude._is_opus_4_7()` gate):
-  - `thinking={"type": "adaptive"}` — adaptive extended reasoning.
-  - `output_config={"effort": "max"}` — **must-have** for Opus. Without this it runs at a weaker reasoning level and is unfairly disadvantaged on the leaderboard.
-  - These are Opus-4.7-only because on older Claude models (Opus 4.1, Sonnet 4.5, Haiku 4.5) LiteLLM falls back to forced tool-use to implement `response_format`, and Anthropic rejects any `thinking` combined with forced tool-use ("Thinking may not be enabled when tool_choice forces tool use"). Opus 4.7 uses a different internal path in LiteLLM (no `tool_choice` on the wire — confirmed via packet capture) and accepts the combination. Don't try to re-enable thinking on the older models without changing the structured-output path.
-- **LiteLLM `output_config` monkey-patch** (top of `arena/llm.py`): LiteLLM's `AnthropicConfig._apply_output_config` hardcodes `effort='max'` as "Opus 4.6 only" (see `litellm/llms/anthropic/chat/transformation.py:1539`) and raises before the request leaves the process. We replace that method with a minimal version that forwards `output_config` as-is and lets the Anthropic API be the source of truth. This patch is load-bearing — if LiteLLM is upgraded, re-check that the method name, signature, and validation logic haven't changed, and that our patch still attaches correctly. Verify by capturing the outbound HTTPS body and confirming `output_config` is at the top level.
+- `send(system, user, schema_cls) -> BaseModel | None` is the single entry point. It retries `_send` up to 3 times; returns `None` only when retries are exhausted (the forfeit signal). Structured outputs either return valid JSON or raise.
+- `OpenRouter._send` is non-streaming and sends three things beyond the messages. All verified on the wire (outbound body captured by wrapping `httpx.Client.send`) with LiteLLM 1.106.2:
+  - `response_format=schema_cls` → `json_schema` with `strict: true` and the legal columns as an `enum`.
+  - `reasoning={"effort": ...}` — OpenRouter's normalized reasoning control, which it maps onto each provider's native knob. Used instead of LiteLLM's `reasoning_effort=` because not every model lists that param (MiMo doesn't). Default is `REASONING_EFFORT = "low"`. Higher levels up to `xhigh` also work: LiteLLM 1.106 accepts `xhigh` for OpenRouter (older LiteLLM rejected it).
+  - `provider={"require_parameters": True}` — **must-have**. Without it OpenRouter may route to hosts that don't support structured outputs (for Haiku: Bedrock and Claude Platform on AWS; for DeepSeek: DeepSeek's own API, Novita, Alibaba, BaseTen; for MiMo: Relace, Novita), which return output that fails schema validation and leads to forfeits.
+- **Per-model effort overrides** (`OpenRouter.reasoning_efforts`): DeepSeek V4.1 Flash and MiMo V2.6 Flash run at `"none"`. Their hosts (InferenceNet, Makora) ignore the effort level: at `xhigh` one move took 93-129s (9.5-15k reasoning tokens), `minimal` was no better (120-134s, 18-20k), and `reasoning={"max_tokens": 1024}` still produced 9-48k. Only `"none"` takes effect (0 reasoning tokens, ~1-6s). GPT-6 Luna, Haiku 5.5 and Gemini 3.5 Flash-Lite run at the default `low`. Measured on one test position: Luna ~300-430 reasoning tokens and 7.5-9s per move (no lower than at `medium`), Haiku ~210 tokens and ~4s, Gemini 0 reasoning tokens and ~1s (`low` effectively turns its reasoning off). At `xhigh` they used ~1-2k tokens and up to 17s.
+- `_parse_message` handles both delivery shapes LiteLLM may use (`message.content` JSON or `message.tool_calls[0].function.arguments`).
+- Direct-provider subclasses (OpenAI, Anthropic, Gemini, xAI) were removed when the app moved to OpenRouter. If direct providers come back, commit `4ddcf00` has the provider-specific workarounds: Anthropic streaming at high `max_tokens`, the `output_config` monkey-patch for LiteLLM's effort whitelist, the Fable `output_format` path, and the thinking-vs-forced-tool-use conflict on older Claude models.
 
 ### Adding a model
 
-1. Add the display name to the appropriate `model_names` list on `GPT`, `Claude`, `Gemini`, `Grok`, or `OpenRouter` in `arena/llm.py`. Display names may include a trailing space suffix for UI friendliness; `api_model_name()` strips it before the call.
-2. Each subclass's `api_model_name()` auto-prefixes for LiteLLM: `anthropic/`, `gemini/`, `xai/`, `openrouter/`. `GPT` needs no prefix. For a brand-new provider, add a subclass with its own prefix override.
-3. Use the provider's own model-listing endpoint to verify the exact model string rather than guessing — `https://generativelanguage.googleapis.com/v1beta/models` for Gemini, `https://api.x.ai/v1/models` for xAI. LiteLLM's provider docs lag behind; the provider's live model list is authoritative.
-4. If adding another Opus-4.7-class model that also supports `thinking`+`output_config`, widen the `_is_opus_4_7()` check — but first re-verify with packet capture that LiteLLM doesn't inject `tool_choice` for that model, otherwise the thinking-vs-forced-tool-use conflict reappears.
-5. No other registration step — `ALL_MODEL_NAMES` in `c4.py` is computed at import time from `LLM.all_model_names()`.
+1. Add the OpenRouter model ID to `OpenRouter.model_names` in `arena/llm.py`. The first two entries are the default players. Display names may include a trailing space suffix for UI friendliness; `api_model_name()` strips it before the call.
+2. Check the exact ID and capabilities against OpenRouter's live list rather than guessing: `https://openrouter.ai/api/v1/models` (`supported_parameters` must include `structured_outputs` and `reasoning`), and `https://openrouter.ai/api/v1/models/<id>/endpoints` for per-host support.
+3. Time a real move. If it reasons for minutes, check whether lower efforts actually take effect on its hosts (compare `usage.completion_tokens_details.reasoning_tokens`) before adding an override to `reasoning_efforts`.
+4. No other registration step — `ALL_MODEL_NAMES` in `c4.py` is computed at import time from `LLM.all_model_names()`.
 
 ### Leaderboard / ELO
 
@@ -57,8 +65,8 @@ Single-process Gradio app where two LLMs play Connect 4 against each other. The 
 
 - `get_games(limit=20)` — used by the Recent games table. Sort-desc + limit + reverse so Python gets the newest-first window in chronological order. Capped because the Gradio Dataframe payload was large enough to cause visible client-side lag.
 - `count_games()` — `collection.count_documents({})`, used to show the "Most recent 20 of N games played" label on the Recent games table. Server-side count, no row transfer.
-- `get_supported_games(supported_models)` — `$in` filter pushed into the Mongo query so ELO only pulls games where *both* players are currently registered in `LLM.all_supported_model_names()`. Retired-model games stay in the DB for history but don't influence ratings.
+- `get_supported_games(supported_models)` — `$in` filter pushed into the Mongo query so ELO only pulls games where *both* players are currently registered in `LLM.all_supported_model_names()`. Retired-model games stay in the DB for history but don't influence ratings. Games are stored under the display name (e.g. `openai/gpt-6-luna`), so renaming a model starts its rating from scratch.
 
-ELO computation (K=32, default 1000, self-play excluded via `calculate_elo_ratings`'s `exclude_self_play=True`) runs on the filtered set only, which keeps the tab responsive even as total game history grows large (currently 9k+ rows, of which only ~100 involve current models).
+ELO computation (K=32, default 1000, self-play excluded via `calculate_elo_ratings`'s `exclude_self_play=True`) runs on the filtered set only, which keeps the tab responsive even as total game history grows large (12.5k+ rows as of Oct 2026).
 
 If the query ever feels slow at the DB layer, a compound index on `(red_player, yellow_player)` would make the `$in` filter near-instant — that's a one-time `createIndex` against the `outsmart.connect` collection.

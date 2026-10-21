@@ -1,18 +1,13 @@
 """
-LLM layer for the Connect 4 arena, built on LiteLLM.
+LLM layer for the Connect 4 arena, built on LiteLLM and routed through OpenRouter.
 
-Single code path for OpenAI, Anthropic, Google (Gemini), xAI (Grok), and
-OpenRouter. Structured outputs via a Pydantic schema passed through
-`response_format`; LiteLLM implements this as tool-use under the hood for
-providers that lack native JSON-schema support. Anthropic calls stream (to
-dodge the 10-min non-streaming timeout at high max_tokens); Opus 4.7 carries
-`thinking` + `output_config` and Fable 5 carries `output_format` +
-`output_config` so both run at full reasoning strength (see Claude docstring).
-Gemini and Grok use LiteLLM's unified `reasoning_effort="high"` knob so they
-also play at maximum reasoning.
+Every model goes through OpenRouter (the `openrouter/` prefix in LiteLLM), so
+one key, `OPENROUTER_API_KEY`, covers them all. Structured outputs via a
+Pydantic schema passed through `response_format`. Reasoning effort defaults to
+low, with per-model overrides for models that are too slow at it.
 """
 
-from abc import ABC
+from abc import ABC, abstractmethod
 import logging
 import os
 import time
@@ -20,32 +15,15 @@ from typing import Dict, List, Self, Type
 
 import litellm
 from dotenv import load_dotenv
-from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-from litellm.utils import type_to_response_format_param
 from pydantic import BaseModel
 
 load_dotenv(override=True)
 
-
-def _apply_output_config(self, data, model, optional_params):
-    """
-    Forward `output_config` to the Anthropic request body without LiteLLM's
-    stale model-name whitelist. LiteLLM hardcodes `effort='max'` as Opus-4.6-only,
-    but Opus 4.7 accepts it too. Let the Anthropic API be the source of truth.
-    """
-    output_config = optional_params.get("output_config")
-    if isinstance(output_config, dict) and output_config:
-        data["output_config"] = output_config
-
-
-AnthropicConfig._apply_output_config = _apply_output_config
-
 logger = logging.getLogger(__name__)
 
-ANTHROPIC_MAX_TOKENS = 128_000
-HAIKU_MAX_TOKENS = 64_000  # Haiku 4.5's output ceiling; the API rejects anything higher
 RETRIES = 3
 RETRY_DELAY_SECONDS = 2
+REASONING_EFFORT = "low"
 
 
 class LLMException(Exception):
@@ -53,7 +31,7 @@ class LLMException(Exception):
 
 
 class LLM(ABC):
-    """Abstract superclass. Default `_send` is the OpenAI path via LiteLLM."""
+    """Abstract superclass. Subclasses list their `model_names` and implement `_send`."""
 
     model_names: List[str] = []
 
@@ -80,17 +58,9 @@ class LLM(ABC):
                     time.sleep(RETRY_DELAY_SECONDS)
         return None
 
+    @abstractmethod
     def _send(self, system: str, user: str, schema_cls: Type[BaseModel]) -> BaseModel:
-        """OpenAI path: no streaming, no max_tokens."""
-        response = litellm.completion(
-            model=self.api_model_name(),
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            response_format=schema_cls,
-        )
-        return _parse_message(response.choices[0].message, schema_cls)
+        pass
 
     @classmethod
     def model_map(cls) -> Dict[str, Type[Self]]:
@@ -120,117 +90,44 @@ class LLM(ABC):
         return subclass(model_name)
 
 
-class GPT(LLM):
-    """
-    OpenAI gpt-5.x models. Sends `reasoning_effort="xhigh"` so models reason
-    at maximum strength rather than OpenAI's default level. The base `_send`
-    doesn't pass reasoning controls, so we override here.
-    """
-
-    model_names = ["gpt-5.6-sol", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"]
-
-    def _send(self, system: str, user: str, schema_cls: Type[BaseModel]) -> BaseModel:
-        response = litellm.completion(
-            model=self.api_model_name(),
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            response_format=schema_cls,
-            reasoning_effort="xhigh",
-        )
-        return _parse_message(response.choices[0].message, schema_cls)
-
-
-class Claude(LLM):
-    """
-    Anthropic models. Streams the response so we can set max_tokens high without
-    hitting the 10-min non-streaming timeout. Reasoning is controlled per model:
-
-    - Fable 5: thinking is always on and cannot be configured; effort is set via
-      `output_config={"effort": "xhigh"}`. LiteLLM's `reasoning_effort` param is
-      unusable here (its Anthropic mapping only knows models up to Opus 4.7), and
-      its `response_format` mapping falls back to forced tool use for models not
-      in its hardcoded allowlist — which Anthropic rejects when thinking is on.
-      So we bypass both: we build the native `output_format` json_schema payload
-      with LiteLLM's own mapper and pass it through directly (verified on the
-      wire: no tools/tool_choice, structured-outputs beta header auto-added).
-    - Opus 4.7: adaptive thinking + `output_config={"effort": "xhigh"}`. Its
-      `response_format` takes LiteLLM's native output_format path already.
-    - Sonnet 4.6, Haiku 4.5: no reasoning kwargs. LiteLLM implements their
-      `response_format` via forced tool use, and Anthropic rejects thinking
-      combined with forced tool_choice.
-    """
-
-    model_names = [
-        "claude-fable-5",
-        "claude-opus-4-7",
-        "claude-sonnet-4-6",
-        "claude-haiku-4-5",
-    ]
-
-    def api_model_name(self) -> str:
-        return f"anthropic/{super().api_model_name()}"
-
-    def _is_fable(self) -> bool:
-        return "fable" in self.api_model_name().lower()
-
-    def _is_opus_4_7(self) -> bool:
-        return "opus-4-7" in self.api_model_name().lower()
-
-    def _max_tokens(self) -> int:
-        return HAIKU_MAX_TOKENS if "haiku" in self.api_model_name().lower() else ANTHROPIC_MAX_TOKENS
-
-    def _send(self, system: str, user: str, schema_cls: Type[BaseModel]) -> BaseModel:
-        kwargs = dict(
-            model=self.api_model_name(),
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            max_tokens=self._max_tokens(),
-            stream=True,
-        )
-        if self._is_fable():
-            response_format = type_to_response_format_param(response_format=schema_cls)
-            kwargs["output_format"] = AnthropicConfig().map_response_format_to_anthropic_output_format(
-                response_format
-            )
-            kwargs["output_config"] = {"effort": "xhigh"}
-        else:
-            kwargs["response_format"] = schema_cls
-            if self._is_opus_4_7():
-                kwargs["thinking"] = {"type": "adaptive"}
-                kwargs["output_config"] = {"effort": "xhigh"}
-        stream = litellm.completion(**kwargs)
-        rebuilt = litellm.stream_chunk_builder(list(stream))
-        return _parse_message(rebuilt.choices[0].message, schema_cls)
-
-
 class OpenRouter(LLM):
     """
     Models accessed via OpenRouter. LiteLLM routes via the `openrouter/` prefix
-    and reads `OPENROUTER_API_KEY` from the environment. Non-streaming — OpenRouter
-    has no Anthropic-style high-max_tokens timeout.
+    and reads `OPENROUTER_API_KEY` from the environment. Non-streaming.
 
-    `reasoning={"effort": "high"}` is passed so reasoning models like kimi-k2.6
-    run at max effort, not OpenRouter's default. Valid OpenRouter effort levels
-    are "low", "medium", "high" — do not use "xhigh"/"max" (LiteLLM rejects).
-    Note: OpenRouter takes `reasoning={...}`, not LiteLLM's unified
-    `reasoning_effort=` param (which OpenRouter explicitly rejects).
+    - `reasoning={"effort": ...}` is OpenRouter's normalized reasoning control,
+      which it maps onto each provider's native knob. Used instead of
+      `reasoning_effort=` because not every model lists that param (MiMo doesn't).
+    - `provider={"require_parameters": True}` stops OpenRouter from routing to
+      hosts that don't support every param we send. Several hosts lack
+      structured outputs (e.g. Bedrock for Claude, DeepSeek's own API) and
+      would return output that fails schema validation.
+
+    The first two names are the default Red and Yellow players in the UI.
     """
 
     model_names = [
-        "moonshotai/kimi-k2.6",
-        "openai/gpt-oss-120b",
-        "openai/gpt-oss-20b",
-        "z-ai/glm-5.1",
-        "nvidia/nemotron-3-super-120b-a12b",
+        "openai/gpt-6-luna",
+        "anthropic/claude-haiku-5.5",
+        "deepseek/deepseek-v4.1-flash-1017",
+        "xiaomi/mimo-v2.6-flash",
+        "google/gemini-3.5-flash-lite",
     ]
+
+    # These reason for minutes per move, and their OpenRouter hosts ignore the
+    # effort level: "minimal" and even `reasoning.max_tokens=1024` still produced
+    # 9-48k reasoning tokens. Only "none" takes effect (0 reasoning tokens, ~2s).
+    reasoning_efforts = {
+        "deepseek/deepseek-v4.1-flash-1017": "none",
+        "xiaomi/mimo-v2.6-flash": "none",
+    }
 
     def api_model_name(self) -> str:
         return f"openrouter/{super().api_model_name()}"
 
+    def reasoning_effort(self) -> str:
+        return self.reasoning_efforts.get(self.model_name, REASONING_EFFORT)
+
     def _send(self, system: str, user: str, schema_cls: Type[BaseModel]) -> BaseModel:
         response = litellm.completion(
             model=self.api_model_name(),
@@ -239,65 +136,10 @@ class OpenRouter(LLM):
                 {"role": "user", "content": user},
             ],
             response_format=schema_cls,
-            reasoning={"effort": "high"},
+            reasoning={"effort": self.reasoning_effort()},
+            provider={"require_parameters": True},
         )
         return _parse_message(response.choices[0].message, schema_cls)
-
-
-class Gemini(LLM):
-    """
-    Google Gemini models via LiteLLM. Reads `GEMINI_API_KEY` from environment.
-    Pro/Flash variants use LiteLLM's `reasoning_effort` (mapped to Gemini 3+'s
-    thinking_level) so they reason at full strength. Flash-Lite variants are
-    non-reasoning by design — LiteLLM rejects `reasoning_effort` for them — so
-    we skip the param for any model whose name contains "lite".
-    Temperature is left at the Gemini default (1.0); values < 1.0 can cause
-    infinite loops on Gemini 3 per the LiteLLM provider docs.
-    """
-
-    model_names = [
-        "gemini-3.1-pro-preview",
-        "gemini-3-flash-preview",
-        "gemini-3.1-flash-lite-preview",
-    ]
-
-    def api_model_name(self) -> str:
-        return f"gemini/{super().api_model_name()}"
-
-    def _supports_reasoning(self) -> bool:
-        return "lite" not in self.model_name.lower()
-
-    def _send(self, system: str, user: str, schema_cls: Type[BaseModel]) -> BaseModel:
-        kwargs = dict(
-            model=self.api_model_name(),
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            response_format=schema_cls,
-        )
-        if self._supports_reasoning():
-            kwargs["reasoning_effort"] = "high"
-        response = litellm.completion(**kwargs)
-        return _parse_message(response.choices[0].message, schema_cls)
-
-
-class Grok(LLM):
-    """
-    xAI Grok models via LiteLLM. Reads `XAI_API_KEY` from environment.
-    Inherits the default OpenAI-style `_send` — no `reasoning_effort` because
-    Grok 4.20 rejects it on every variant (including the *-reasoning one):
-    xAI returns "Model ... does not support parameter reasoningEffort." The
-    -reasoning variant reasons at its built-in level; -non-reasoning doesn't.
-    """
-
-    model_names = [
-        "grok-4.20-0309-reasoning",
-        "grok-4.20-0309-non-reasoning",
-    ]
-
-    def api_model_name(self) -> str:
-        return f"xai/{super().api_model_name()}"
 
 
 def _parse_message(message, schema_cls: Type[BaseModel]) -> BaseModel:
